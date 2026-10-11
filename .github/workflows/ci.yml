@@ -23,3 +23,5 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+      - name: Security audit (runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high

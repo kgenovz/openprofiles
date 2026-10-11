@@ -4,7 +4,8 @@ import { silentLogger } from '../src/log.js';
 import { createApp } from '../src/web/app.js';
 import { makeService, seededFake } from './helpers/setup.js';
 
-const PASSWORD = 'correct horse battery';
+const EMAIL = 'kyle@example.com';
+const STREMIO_PASSWORD = 'hunter22';
 
 /** Minimal cookie-keeping client for the test server. */
 class Browser {
@@ -37,8 +38,8 @@ class Browser {
     return this.request(path, { method: 'POST', form: { _csrf: await this.csrf(), ...fields } });
   }
 
-  async signIn() {
-    return this.request('/login', { method: 'POST', form: { password: PASSWORD } });
+  async signIn(password = STREMIO_PASSWORD) {
+    return this.request('/signin', { method: 'POST', form: { email: EMAIL, password } });
   }
 }
 
@@ -46,11 +47,12 @@ describe('web', () => {
   let server;
   let base;
   let ctx;
+  const repo = () => ctx.accounts.forAccount(1).repo;
 
   before(async () => {
     ctx = makeService({ fake: seededFake() });
-    const config = { publicUrl: 'http://localhost', adminPassword: PASSWORD, trustProxy: false };
-    const app = createApp({ config, db: ctx.db, service: ctx.service, log: silentLogger });
+    const config = { publicUrl: 'http://localhost', trustProxy: false };
+    const app = createApp({ config, db: ctx.db, accounts: ctx.accounts, log: silentLogger });
     server = app.listen(0);
     await new Promise((resolve) => server.once('listening', resolve));
     base = `http://127.0.0.1:${server.address().port}`;
@@ -58,21 +60,34 @@ describe('web', () => {
 
   after(() => server.close());
 
-  it('sends signed-out visitors to the login page', async () => {
+  it('sends signed-out visitors to the sign-in page', async () => {
     const res = await new Browser(base).request('/configure');
     assert.equal(res.status, 303);
-    assert.equal(res.location, '/login');
+    assert.equal(res.location, '/signin');
+    const page = await new Browser(base).request('/signin');
+    assert.match(page.text, /Sign in with Stremio/);
+    assert.doesNotMatch(page.text, /Admin password/);
   });
 
-  it('rejects a wrong password and sets a strict, http-only cookie on success', async () => {
+  it('a wrong Stremio password is refused and creates nothing', async () => {
+    const res = await new Browser(base).signIn('nope');
+    assert.equal(res.status, 401);
+    assert.match(res.text, /Stremio rejected that email or password/);
+    assert.equal(ctx.accounts.accounts.count(), 0);
+  });
+
+  it('the first sign-in creates the account and lands on the page with a welcome', async () => {
     const b = new Browser(base);
-    const bad = await b.request('/login', { method: 'POST', form: { password: 'nope' } });
-    assert.equal(bad.status, 401);
-    const good = await b.signIn();
-    assert.equal(good.status, 303);
-    const cookie = good.headers.get('set-cookie');
+    const res = await b.signIn();
+    assert.equal(res.status, 303);
+    assert.equal(res.location, '/configure');
+    const cookie = res.headers.get('set-cookie');
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Strict/);
+    const page = (await b.request('/configure')).text;
+    assert.match(page, /Welcome!/);
+    assert.match(page, /Original/);
+    assert.ok(!page.includes(STREMIO_PASSWORD), 'the Stremio password never appears');
   });
 
   it('rejects POSTs without the CSRF token', async () => {
@@ -82,33 +97,25 @@ describe('web', () => {
     assert.equal(res.status, 403);
   });
 
-  it('walks through setup, creating a profile and switching', async () => {
+  it('creates a profile (escaping its name) and switches to it', async () => {
     const b = new Browser(base);
     await b.signIn();
-    assert.match((await b.request('/configure')).text, /Connect your Stremio account/);
-
-    await b.post('/account/link', { email: 'kyle@example.com', password: 'hunter22' });
-    let page = (await b.request('/configure')).text;
-    assert.match(page, /Saved as the &quot;Original&quot; profile|saved as the &quot;Original&quot; profile/i);
-    assert.match(page, /Original/);
-    assert.ok(!page.includes('hunter22'), 'the Stremio password never appears');
-
     await b.post('/profiles', { name: 'Kids <script>', from: 'empty', colour: '#e5484d' });
-    page = (await b.request('/configure')).text;
+    let page = (await b.request('/configure')).text;
     assert.ok(page.includes('Kids &lt;script&gt;'), 'names are escaped');
     assert.ok(!page.includes('Kids <script>'));
 
-    const kids = ctx.repo.listProfiles().find((p) => p.name.startsWith('Kids'));
+    const kids = repo().listProfiles().find((p) => p.name.startsWith('Kids'));
     await b.post(`/profiles/${kids.id}/switch`);
     page = (await b.request('/configure')).text;
     assert.match(page, /Switched to/);
-    assert.equal(ctx.repo.getState().active_profile_id, kids.id);
+    assert.equal(repo().getState().active_profile_id, kids.id);
   });
 
   it('shows service errors as a flash message', async () => {
     const b = new Browser(base);
     await b.signIn();
-    const active = ctx.repo.getState().active_profile_id;
+    const active = repo().getState().active_profile_id;
     await b.post(`/profiles/${active}/delete`);
     const page = (await b.request('/configure')).text;
     assert.match(page, /flash-error/);
@@ -118,7 +125,7 @@ describe('web', () => {
   it('downloads a backup as JSON without caching', async () => {
     const b = new Browser(base);
     await b.signIn();
-    const backup = ctx.repo.listBackups().find((x) => x.kind === 'original');
+    const backup = repo().listBackups().find((x) => x.kind === 'original');
     const res = await b.request(`/backups/${backup.id}/download`);
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('cache-control'), 'no-store');
@@ -139,12 +146,35 @@ describe('web', () => {
     assert.match((await bad.json()).error, /valid JSON/);
   });
 
-  it('rate-limits repeated wrong passwords', async () => {
+  it('lists where you are signed in, and can sign the other places out', async () => {
+    const phone = new Browser(base);
+    await phone.signIn();
+    const desk = new Browser(base);
+    await desk.signIn();
+    const page = (await desk.request('/configure')).text;
+    assert.match(page, /This device/);
+    await desk.post('/account/sessions/others/signout');
+    assert.equal((await phone.request('/configure')).status, 303, 'the other session is gone');
+    assert.equal((await desk.request('/configure')).status, 200, 'this one stays');
+  });
+
+  it('deleting the account needs DELETE typed, then removes it and signs out', async () => {
+    const b = new Browser(base);
+    await b.signIn();
+    await b.post('/account/delete', { confirm: 'nope' });
+    assert.equal(ctx.accounts.accounts.count(), 1, 'not deleted without the confirmation');
+    const res = await b.post('/account/delete', { confirm: 'DELETE' });
+    assert.match(res.text, /were deleted/);
+    assert.equal(ctx.accounts.accounts.count(), 0);
+    assert.equal((await b.request('/configure')).status, 303);
+  });
+
+  it('rate-limits repeated sign-in attempts', async () => {
     const b = new Browser(base);
     let last;
-    for (let i = 0; i < 12; i++) last = await b.request('/login', { method: 'POST', form: { password: 'wrong' } });
+    for (let i = 0; i < 12; i++) last = await b.signIn('wrong');
     assert.equal(last.status, 429);
-    const blocked = await b.request('/login', { method: 'POST', form: { password: PASSWORD } });
+    const blocked = await b.signIn();
     assert.equal(blocked.status, 429, 'even the right password is refused while limited');
   });
 });

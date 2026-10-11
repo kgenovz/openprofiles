@@ -88,6 +88,144 @@ const MIGRATIONS = [
     WHEN '#0090ff' THEN '#0a7fe0'
     ELSE avatar_colour END;
   `,
+  // Phase 2 / M4: many Stremio accounts per server. `account` + `state` become
+  // `accounts`; everything else gains account_id. The existing account becomes
+  // account 1 with its add-on token unchanged (installed add-ons keep working).
+  // Blobs are re-encrypted to the per-account scheme by core/rekey.js
+  // (enc_version 1 → 2). Old sessions are dropped: everyone signs in again.
+  // Profile names are unique per account among profiles not in the bin.
+  {
+    foreignKeysOff: true,
+    sql: `
+  CREATE TABLE accounts (
+    id INTEGER PRIMARY KEY,
+    stremio_user_id TEXT NOT NULL UNIQUE,
+    stremio_email TEXT NOT NULL,
+    auth_key_enc BLOB NOT NULL,
+    addon_token TEXT NOT NULL UNIQUE,
+    active_profile_id INTEGER REFERENCES profiles (id) ON DELETE SET NULL,
+    addon_installed INTEGER,
+    enc_version INTEGER NOT NULL DEFAULT 2,
+    created_at INTEGER NOT NULL,
+    last_login_at INTEGER NOT NULL
+  );
+  INSERT INTO accounts (id, stremio_user_id, stremio_email, auth_key_enc, addon_token, active_profile_id,
+    addon_installed, enc_version, created_at, last_login_at)
+    SELECT 1, a.stremio_user_id, a.stremio_email, a.auth_key_enc, s.addon_token, s.active_profile_id,
+      s.addon_installed, 1, a.linked_at, a.linked_at
+    FROM account a JOIN state s ON s.id = 1 WHERE a.id = 1;
+
+  CREATE TABLE profiles_new (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    name TEXT NOT NULL COLLATE NOCASE,
+    avatar_preset TEXT NOT NULL,
+    avatar_colour TEXT NOT NULL,
+    library_enc BLOB NOT NULL,
+    addons_enc BLOB NOT NULL,
+    notifs_enc BLOB,
+    library_count INTEGER NOT NULL,
+    addon_count INTEGER NOT NULL,
+    notif_count INTEGER,
+    snapshot_taken_at INTEGER NOT NULL,
+    stremio_user_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    deleted_at INTEGER                 -- set: in the bin (M5)
+  );
+  INSERT INTO profiles_new (id, account_id, name, avatar_preset, avatar_colour, library_enc, addons_enc, notifs_enc,
+    library_count, addon_count, notif_count, snapshot_taken_at, stremio_user_id, created_at)
+    SELECT id, 1, name, avatar_preset, avatar_colour, library_enc, addons_enc, notifs_enc,
+      library_count, addon_count, notif_count, snapshot_taken_at, stremio_user_id, created_at FROM profiles;
+  DROP TABLE profiles;
+  ALTER TABLE profiles_new RENAME TO profiles;
+  CREATE UNIQUE INDEX profiles_account_name ON profiles (account_id, name) WHERE deleted_at IS NULL;
+  CREATE INDEX profiles_account ON profiles (account_id);
+
+  CREATE TABLE backups_new (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('original', 'auto', 'pre_switch', 'pre_restore', 'pre_change', 'manual', 'imported')),
+    label TEXT NOT NULL,
+    library_enc BLOB NOT NULL,
+    addons_enc BLOB NOT NULL,
+    notifs_enc BLOB,
+    library_count INTEGER NOT NULL,
+    addon_count INTEGER NOT NULL,
+    notif_count INTEGER,
+    stremio_user_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  INSERT INTO backups_new (id, account_id, kind, label, library_enc, addons_enc, notifs_enc, library_count,
+    addon_count, notif_count, stremio_user_id, created_at)
+    SELECT id, 1, kind, label, library_enc, addons_enc, notifs_enc, library_count, addon_count, notif_count,
+      stremio_user_id, created_at FROM backups;
+  DROP TABLE backups;
+  ALTER TABLE backups_new RENAME TO backups;
+  CREATE INDEX backups_account_kind_created ON backups (account_id, kind, created_at);
+
+  CREATE TABLE switch_journal_new (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('switch', 'restore')),
+    from_profile_id INTEGER REFERENCES profiles (id) ON DELETE SET NULL,
+    to_profile_id INTEGER REFERENCES profiles (id) ON DELETE SET NULL,
+    target_backup_id INTEGER REFERENCES backups (id) ON DELETE SET NULL,
+    rollback_backup_id INTEGER REFERENCES backups (id) ON DELETE SET NULL,
+    phase TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'finished', 'rolled_back')),
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    error TEXT,
+    warnings TEXT NOT NULL DEFAULT '[]'
+  );
+  INSERT INTO switch_journal_new (id, account_id, kind, from_profile_id, to_profile_id, target_backup_id,
+    rollback_backup_id, phase, status, started_at, finished_at, error, warnings)
+    SELECT id, 1, kind, from_profile_id, to_profile_id, target_backup_id, rollback_backup_id, phase, status,
+      started_at, finished_at, error, warnings FROM switch_journal;
+  DROP TABLE switch_journal;
+  ALTER TABLE switch_journal_new RENAME TO switch_journal;
+  CREATE INDEX switch_journal_account_status ON switch_journal (account_id, status);
+
+  DROP TABLE sessions;
+  CREATE TABLE sessions (
+    id_hash BLOB PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    csrf TEXT NOT NULL,
+    flash TEXT,
+    user_agent TEXT,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX sessions_account ON sessions (account_id);
+
+  DROP TABLE state;
+  DROP TABLE account;
+  `,
+  },
+  // M5: nothing gets lost.
+  //   backups.content_hash  lets the daily backup skip a day when nothing changed
+  //   backups.profile_id    which profile a pre_change backup was taken of (undo for edits)
+  //   activity              per-account log shown on the Account tab
+  //   meta                  server facts, e.g. the secret key's fingerprint (checked at boot)
+  `
+  ALTER TABLE backups ADD COLUMN content_hash TEXT;
+  ALTER TABLE backups ADD COLUMN profile_id INTEGER REFERENCES profiles (id) ON DELETE SET NULL;
+
+  CREATE TABLE activity (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL
+  );
+  CREATE INDEX activity_account_at ON activity (account_id, at);
+
+  CREATE TABLE meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {
@@ -99,15 +237,27 @@ export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {
   return db;
 }
 
-export function migrate(db) {
+/** `upTo` stops at an older schema version (tests use it to build pre-upgrade databases). */
+export function migrate(db, { upTo = MIGRATIONS.length } = {}) {
   const current = db.pragma('user_version', { simple: true });
   if (current > MIGRATIONS.length) {
     throw new Error(`Database schema v${current} is newer than this build (v${MIGRATIONS.length}). Upgrade OpenProfiles.`);
   }
-  for (let v = current; v < MIGRATIONS.length; v++) {
-    db.transaction(() => {
-      db.exec(MIGRATIONS[v]);
-      db.pragma(`user_version = ${v + 1}`);
-    })();
+  for (let v = current; v < upTo; v++) {
+    const step = typeof MIGRATIONS[v] === 'string' ? { sql: MIGRATIONS[v] } : MIGRATIONS[v];
+    // Table rebuilds need foreign keys off, and the pragma can't change inside a transaction.
+    if (step.foreignKeysOff) db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        db.exec(step.sql);
+        if (step.foreignKeysOff) {
+          const broken = db.pragma('foreign_key_check');
+          if (broken.length) throw new Error(`Migration ${v + 1} left ${broken.length} broken foreign keys`);
+        }
+        db.pragma(`user_version = ${v + 1}`);
+      })();
+    } finally {
+      if (step.foreignKeysOff) db.pragma('foreign_keys = ON');
+    }
   }
 }

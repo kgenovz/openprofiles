@@ -50,7 +50,9 @@ https.
    | Variable | Required | What it is |
    |---|---|---|
    | `PUBLIC_URL` | yes | The https address OpenProfiles is reached at, e.g. `https://profiles.example.com` |
-   | `ADMIN_PASSWORD` | yes | Password for the settings page (8+ characters; longer is better) |
+   | `ACCESS` | no | Who can sign in. `owner` (default): the first Stremio account to sign in owns the server. `list`: only `ALLOWED_ACCOUNTS`. `open`: anyone (a shared instance) |
+   | `ALLOWED_ACCOUNTS` | with `list` | Stremio emails or user ids, comma-separated |
+   | `MAX_ACCOUNTS` | no | With `open`, the most accounts the server takes |
    | `LOG_LEVEL` | no | `error`, `warn`, `info` (default) or `debug` |
    | `SECRET_KEY` | no | 32-byte key (64 hex chars) instead of the generated `/data/secret.key` |
    | `PORT` | no | Port inside the container (default `7000`) |
@@ -64,12 +66,17 @@ https.
    }
    ```
 
-3. `docker compose up -d`, open `https://profiles.example.com`, sign in with `ADMIN_PASSWORD`.
-4. **Connect your Stremio account** with its email and password. The password is sent to
-   Stremio once to get a sign-in key and is never stored. Your account as it is now becomes the
-   **Original** profile, and a permanent backup of it is kept.
+3. `docker compose up -d` and open `https://profiles.example.com`.
+4. **Sign in with your Stremio email and password.** There's no separate password: your
+   Stremio account is your OpenProfiles account. The password is sent to Stremio once to get a
+   sign-in key and is never stored. The first time, your account as it is now becomes the
+   **Original** profile, and a permanent backup of it is kept. With the default `ACCESS=owner`,
+   do this right away: the first account to sign in owns the server.
 5. Create profiles: an empty one (same add-ons, empty library) or a copy of the account.
 6. Under **Switch from inside Stremio**, choose **Install in Stremio**.
+
+One server can hold several Stremio accounts (`ACCESS=list` or `open`). Each account only ever
+sees and changes its own profiles, backups and Stremio account.
 
 ### Back up the data volume
 
@@ -79,10 +86,18 @@ saved profiles and backups can't be read. Back up the whole volume.
 
 ## Backups and recovery
 
-- A backup is taken automatically before every switch and restore. You can also make one
-  yourself, restore any backup (with a preview first), or download it as JSON.
-  Downloads contain your add-on links: keep them private.
+- A backup is taken automatically every day (only when something changed; the last 14 are
+  kept), and before every switch, restore and edit. You can also make one yourself, restore any
+  backup (with a preview first), or download it as JSON. Downloads contain your add-on links:
+  keep them private.
 - The backup made at setup is kept forever.
+- Deleted profiles go to a **bin** for 30 days, so they can be brought back.
+- **Download everything** puts every profile and backup in one file, optionally locked with a
+  passphrase, and **Bring back from a file** restores it (on this server or a new one).
+- Every night the server also keeps a full copy of its database in `/data/snapshots`
+  (7 daily + 4 weekly). Those copies are encrypted too, so keep `secret.key` with them.
+- If `secret.key` doesn't match the data, OpenProfiles refuses to start and says so, rather
+  than writing anything the rest of the data couldn't be read with.
 - If a switch stops partway (Stremio went down, the server restarted), the page shows
   **A switch didn't finish** with two choices: finish switching, or go back to how things were.
   Nothing else can change until you pick one.
@@ -129,7 +144,7 @@ node scripts/dev-stremio.js
 ```
 
 ```bash
-PUBLIC_URL=http://localhost:7000 ADMIN_PASSWORD=devpassword DATA_DIR=./data-dev \
+PUBLIC_URL=http://localhost:7000 DATA_DIR=./data-dev \
   STREMIO_API_URL=http://localhost:7001 npm run dev
 ```
 

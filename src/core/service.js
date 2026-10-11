@@ -1,20 +1,27 @@
 import { randomToken } from '../crypto.js';
 import { silentLogger } from '../log.js';
-import { GuardError, MAX_ADDONS, MAX_LIBRARY_ITEMS, decodeSnapshot } from './guard.js';
+import { sealExport, openExport } from './exporter.js';
+import {
+  GuardError, MAX_ADDONS, MAX_LIBRARY_ITEMS, checkAddons, checkLibrary, checkNotifs, decodeSnapshot,
+} from './guard.js';
 import { parseStremShareBackup, sameAccount, suggestedProfileName } from './importer.js';
 import {
   LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, hasId,
 } from './library.js';
 import { Mutex } from './lock.js';
+import { snapshotHash } from './repo.js';
 import { isValidAvatar } from '../addon/avatars.js';
 import { ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
 
 // Each clears 3.5:1 under a white initial (see the poster artboard in the M2 design).
 export const AVATAR_COLOURS = ['#e5484d', '#e05d0c', '#b7790b', '#3b8f4b', '#0f8f80', '#0a7fe0', '#8e4ec6', '#d6409f'];
-const DEFAULT_COLOUR = AVATAR_COLOURS[5];
+export const DEFAULT_COLOUR = AVATAR_COLOURS[5];
 const INTER_BATCH_DELAY_MS = 75;
 const MAX_NAME_LENGTH = 40;
 const IMPORT_STASH_MS = 15 * 60 * 1000;
+export const MAX_PROFILES = 20;
+export const BIN_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const NATIVE_PROFILES_WARNING =
   'Your Stremio account has its own profiles (a Supporter feature). OpenProfiles would swap the library ' +
@@ -34,6 +41,32 @@ export function userMessageOf(err) {
 }
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The account's live library, add-ons and notifications. A failed notification read is `null`, not `[]`. */
+export async function readLiveState(stremio, authKey, log = silentLogger) {
+  const [library, addons, notifs] = await Promise.all([
+    stremio.getLibrary(authKey),
+    stremio.getAddons(authKey),
+    stremio.getNotifs(authKey).catch((err) => {
+      log.warn('Notification read failed; continuing without notifications', { error: err.message });
+      return null;
+    }),
+  ]);
+  return {
+    library: library.filter(hasId),
+    addons,
+    notifs: notifs === null ? null : notifs.filter(hasId),
+  };
+}
+
+export function checkLiveSize(live) {
+  if (live.library.length > MAX_LIBRARY_ITEMS) {
+    throw new UserError('TOO_LARGE', `The Stremio library has ${live.library.length} items (including removed ones); OpenProfiles can store up to ${MAX_LIBRARY_ITEMS}. Nothing was changed.`);
+  }
+  if (live.addons.length > MAX_ADDONS) {
+    throw new UserError('TOO_LARGE', `The account has ${live.addons.length} add-ons; OpenProfiles can store up to ${MAX_ADDONS}. Nothing was changed.`);
+  }
+}
 
 /**
  * Everything that reads or writes the Stremio account goes through here, one
@@ -101,51 +134,6 @@ export class ProfilesService {
     return this.repo.getBackup(id);
   }
 
-  // ── account ──────────────────────────────────────────────────────────────
-
-  /**
-   * Sign in with Stremio. The first time, this creates the "Original" profile
-   * from the account's current state plus the never-pruned `original` backup.
-   * Later sign-ins (expired key) only replace the stored key.
-   */
-  linkAccount(email, password) {
-    return this.lock.run(async () => {
-      const authKey = await this.stremio.login(email, password);
-      const user = await this.stremio.getUser(authKey);
-      if (user.parentId) {
-        throw new UserError('CHILD_PROFILE', 'That sign-in belongs to a profile inside another Stremio account. Sign in with the main account.');
-      }
-      const warnings = [];
-      if (user.userProfiles && Object.keys(user.userProfiles).length > 1) warnings.push(NATIVE_PROFILES_WARNING);
-
-      const existing = this.repo.getAccount();
-      if (existing) {
-        if (existing.stremio_user_id !== user.id) {
-          throw new UserError('OTHER_ACCOUNT', `This server is set up for ${existing.stremio_email}. OpenProfiles serves one Stremio account per server.`);
-        }
-        this.repo.updateAuthKey({ email: user.email, authKey });
-        this.log.info('Stremio sign-in renewed');
-        return { created: false, warnings };
-      }
-
-      const live = await this.readLive(authKey);
-      this.checkLiveSize(live);
-      if (live.addons.length === 0) {
-        throw new UserError('NO_ADDONS', 'This Stremio account has no add-ons installed. Install Cinemeta in Stremio, then sign in again.');
-      }
-      const snapshot = this.capture(live);
-      this.repo.transaction(() => {
-        this.repo.insertAccount({ stremioUserId: user.id, email: user.email, authKey });
-        const id = this.repo.insertProfile({ name: 'Original', avatarPreset: 'initial', avatarColour: DEFAULT_COLOUR, stremioUserId: user.id, snapshot });
-        this.repo.initState({ activeProfileId: id, addonToken: randomToken() });
-        this.repo.insertBackup({ kind: 'original', label: 'Account as it was at setup', stremioUserId: user.id, snapshot });
-      });
-      this.noteAddons(live.addons);
-      this.log.info('Stremio account linked', { libraryItems: snapshot.library.length, addons: snapshot.addons.length });
-      return { created: true, warnings };
-    });
-  }
-
   // ── the in-Stremio add-on ────────────────────────────────────────────────
 
   /** Install links and whether the add-on was in the account's list at the last read. */
@@ -176,6 +164,7 @@ export class ProfilesService {
       }
       this.repo.setAddonToken(token);
       this.noteAddons(addons);
+      this.repo.logActivity('addon-link', 'Made a new add-on link');
       this.log.info('Add-on link rotated');
       return this.addonInfo();
     });
@@ -190,6 +179,7 @@ export class ProfilesService {
       const clean = this.validateName(name);
       this.validateColour(colour);
       this.assertNameFree(clean);
+      this.assertRoomForProfile();
       this.assertNoOpenJournal();
       const { authKey } = await this.session();
       let snapshot;
@@ -208,6 +198,7 @@ export class ProfilesService {
         throw new UserError('NO_ADDONS', 'The account has no add-ons installed, so a new profile would have none. Install Cinemeta first.');
       }
       const id = this.repo.insertProfile({ name: clean, avatarPreset: 'initial', avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot });
+      this.repo.logActivity('profile', `Created "${clean}"`);
       return this.repo.getProfile(id);
     });
   }
@@ -217,6 +208,7 @@ export class ProfilesService {
     const clean = this.validateName(name);
     if (clean.toLowerCase() !== profile.name.toLowerCase()) this.assertNameFree(clean);
     this.repo.renameProfile(id, clean);
+    if (clean !== profile.name) this.repo.logActivity('profile', `Renamed "${profile.name}" to "${clean}"`);
   }
 
   /** `picture` is an avatar preset (see addon/avatars.js); omitted keeps the current one. */
@@ -238,8 +230,28 @@ export class ProfilesService {
       if (open && (open.from_profile_id === id || open.to_profile_id === id)) {
         throw new UserError('RECOVERY_NEEDED', 'An unfinished switch involves this profile. Resolve it first.');
       }
-      this.repo.deleteProfile(id);
-      this.log.info('Profile deleted', { profileId: id });
+      this.repo.moveProfileToBin(id);
+      this.repo.logActivity('profile', `Deleted "${profile.name}" (in the bin for ${BIN_DAYS} days)`);
+      this.log.info('Profile moved to the bin', { profileId: id });
+    });
+  }
+
+  listBin() {
+    return this.repo.listBin().map((p) => ({ ...p, purgeAt: p.deleted_at + BIN_DAYS * DAY_MS }));
+  }
+
+  /** Bring a profile back from the bin. If its name was reused meanwhile, it comes back as "Name (restored)". */
+  restoreFromBin(id) {
+    return this.lock.run(async () => {
+      const profile = this.repo.getBinProfile(id);
+      if (!profile) throw new UserError('NOT_FOUND', "That profile isn't in the bin any more.");
+      this.assertRoomForProfile();
+      let name = profile.name;
+      if (this.nameTaken(name)) name = `${profile.name.slice(0, MAX_NAME_LENGTH - 11)} (restored)`;
+      if (this.nameTaken(name)) throw new UserError('NAME_TAKEN', `Rename "${name}" first, then bring this profile back.`);
+      this.repo.restoreProfileFromBin(id, name);
+      this.repo.logActivity('profile', `Brought "${name}" back from the bin`);
+      return this.repo.getProfile(id);
     });
   }
 
@@ -311,6 +323,7 @@ export class ProfilesService {
       this.repo.closeJournal(journalId, 'finished', result.warnings);
     });
     this.repo.pruneBackups();
+    this.repo.logActivity('switch', `Switched from ${outgoing ? `"${outgoing.name}"` : '(none)'} to "${target.name}"`);
     this.log.info('Switch finished', { journalId, ...result.library, warnings: result.warnings.length });
     return { alreadyActive: false, profile: this.repo.getProfile(profileId), ...result };
   }
@@ -397,6 +410,7 @@ export class ProfilesService {
         this.repo.closeJournal(j.id, 'finished', result.warnings);
       });
       this.repo.pruneBackups();
+      this.repo.logActivity('recovery', 'Finished an interrupted switch');
       this.log.info('Interrupted operation finished', { journalId: j.id });
       return result;
     });
@@ -418,6 +432,7 @@ export class ProfilesService {
       // The pointer never moved and the outgoing profile was saved before any
       // write, so closing the journal is all that's left.
       this.repo.closeJournal(j.id, 'rolled_back', result.warnings);
+      this.repo.logActivity('recovery', 'Went back to before an interrupted switch');
       this.log.info('Interrupted operation rolled back', { journalId: j.id });
       return result;
     });
@@ -435,8 +450,51 @@ export class ProfilesService {
       this.checkLiveSize(live);
       const id = this.repo.insertBackup({ kind: 'manual', label: clean, stremioUserId: account.stremio_user_id, snapshot: this.capture(live) });
       this.repo.pruneBackups();
+      this.repo.logActivity('backup', `Backed up: "${clean}"`);
       return this.repo.getBackup(id);
     });
+  }
+
+  /**
+   * The daily automatic backup of the live account. Skipped when nothing
+   * changed since the last automatic one, while a switch is unfinished, or
+   * when Stremio has signed the account out. Returns what happened.
+   */
+  autoBackup() {
+    return this.lock.run(async () => {
+      const account = this.requireAccount();
+      if (this.repo.getOpenJournal()) return { done: false, reason: 'unfinished switch' };
+      let authKey;
+      try {
+        ({ authKey } = await this.session());
+      } catch (err) {
+        if (err.kind === 'auth' || err.code === 'ACCOUNT_CHANGED') return { done: false, reason: 'signed out of Stremio' };
+        throw err;
+      }
+      const live = await this.readLive(authKey);
+      this.checkLiveSize(live);
+      const snapshot = this.capture(live);
+      const last = this.repo.latestBackup('auto');
+      if (last && last.content_hash === snapshotHash(snapshot)) return { done: false, reason: 'unchanged' };
+      const id = this.repo.insertBackup({ kind: 'auto', label: 'Daily backup', stremioUserId: account.stremio_user_id, snapshot });
+      this.repo.pruneBackups();
+      return { done: true, backupId: id };
+    });
+  }
+
+  /**
+   * Keep a copy of a profile's saved state before an edit changes it
+   * (add-ons, Cinemeta, imports). Restoring that backup is the edit's undo.
+   * Call inside the operation's lock.
+   */
+  backupProfileBeforeChange(profileId, label) {
+    const account = this.requireAccount();
+    const row = this.repo.getProfileRow(profileId);
+    if (!row) throw new UserError('NOT_FOUND', 'That profile no longer exists.');
+    const snapshot = decodeSnapshot(this.repo.cipher, row, row.name);
+    const id = this.repo.insertBackup({ kind: 'pre_change', label, stremioUserId: account.stremio_user_id, snapshot, profileId });
+    this.repo.pruneBackups();
+    return id;
   }
 
   /** Write a backup to the account and make it the active profile's saved state. */
@@ -449,9 +507,23 @@ export class ProfilesService {
       const activeId = this.repo.getState()?.active_profile_id;
       const active = activeId != null ? this.repo.getProfile(activeId) : null;
       if (!active) throw new UserError('NO_ACTIVE', 'No profile is active.');
-      const { authKey } = await this.session();
       this.assertAnchor(row, account, 'This backup');
       const target = decodeSnapshot(this.repo.cipher, row, 'This backup');
+
+      // An edit's backup of a profile that isn't in use: undo only puts the
+      // profile's saved copy back. Nothing in Stremio changes.
+      if (row.profile_id != null && row.profile_id !== activeId) {
+        const profile = this.repo.getProfile(row.profile_id);
+        if (!profile) throw new UserError('NOT_FOUND', 'The profile this backup belongs to no longer exists.');
+        this.repo.transaction(() => {
+          this.backupProfileBeforeChange(profile.id, `Before undoing an edit of "${profile.name}"`);
+          this.repo.saveProfileSnapshot(profile.id, target);
+        });
+        this.repo.logActivity('restore', `Put "${profile.name}" back to "${row.label}"`);
+        return { warnings: [], profileOnly: true };
+      }
+
+      const { authKey } = await this.session();
       const live = await this.readLive(authKey);
       this.checkLiveSize(live);
 
@@ -470,6 +542,7 @@ export class ProfilesService {
         this.repo.closeJournal(journalId, 'finished', result.warnings);
       });
       this.repo.pruneBackups();
+      this.repo.logActivity('restore', `Restored "${row.label}"`);
       this.log.info('Backup restored', { backupId, journalId });
       return result;
     });
@@ -482,6 +555,97 @@ export class ProfilesService {
       if (backup.kind === 'original') throw new UserError('PROTECTED', 'The setup backup is kept permanently.');
       if (this.repo.pinnedBackupIds().has(id)) throw new UserError('RECOVERY_NEEDED', 'An unfinished switch needs this backup. Resolve it first.');
       this.repo.deleteBackup(id);
+    });
+  }
+
+  /**
+   * Every profile and backup of the account in one file, sealed with
+   * `passphrase` when given. Something that can't be decrypted is listed as
+   * unreadable instead of failing the whole download.
+   */
+  exportEverything(passphrase) {
+    const account = this.requireAccount();
+    const activeId = this.repo.getState()?.active_profile_id;
+    const decode = (row, label) => {
+      try {
+        return decodeSnapshot(this.repo.cipher, row, label);
+      } catch (err) {
+        if (err instanceof GuardError) return null;
+        throw err;
+      }
+    };
+    const profiles = this.repo.listProfiles().map((p) => {
+      const snap = decode(this.repo.getProfileRow(p.id), p.name);
+      return {
+        name: p.name, avatar_preset: p.avatar_preset, avatar_colour: p.avatar_colour, active: p.id === activeId,
+        created_at: p.created_at, snapshot_taken_at: p.snapshot_taken_at,
+        ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
+      };
+    });
+    const backups = this.repo.listBackups().map((b) => {
+      const snap = decode(this.repo.getBackupRow(b.id), b.label);
+      return {
+        kind: b.kind, label: b.label, created_at: b.created_at,
+        ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
+      };
+    });
+    this.repo.logActivity('export', `Downloaded everything${passphrase ? ' (passphrase-protected)' : ''}`);
+    return sealExport({
+      exported_at: new Date(this.now()).toISOString(),
+      stremio_user_id: account.stremio_user_id,
+      stremio_email: account.stremio_email,
+      profiles,
+      backups,
+    }, passphrase);
+  }
+
+  /**
+   * Bring back an "everything" export: each profile is added (renamed if the
+   * name is in use) and each backup is kept. Nothing in Stremio changes;
+   * switch to a profile or restore a backup to apply it.
+   */
+  importEverything(raw, { passphrase, acceptOtherAccount = false } = {}) {
+    return this.lock.run(async () => {
+      const account = this.requireAccount();
+      const file = openExport(raw, passphrase);
+      if (file.stremio_user_id !== account.stremio_user_id && !acceptOtherAccount) {
+        throw new UserError('OTHER_ACCOUNT', `This export is from ${file.stremio_email || 'another Stremio account'}. Tick the box to confirm you want it on this account anyway.`);
+      }
+      const readable = (x) => x && !x.unreadable;
+      const check = (x, label) => {
+        checkLibrary(x.library, label);
+        checkAddons(x.addons, label);
+        checkNotifs(x.notifs ?? null, label);
+        return { library: x.library, addons: x.addons, notifs: x.notifs ?? null };
+      };
+      const profiles = (Array.isArray(file.profiles) ? file.profiles : []).filter(readable);
+      const backups = (Array.isArray(file.backups) ? file.backups : []).filter(readable);
+      const room = MAX_PROFILES - this.repo.countProfiles();
+      if (profiles.length > room) {
+        throw new UserError('TOO_MANY', `This export has ${profiles.length} profiles, and there's room for ${room} more. Delete some first.`);
+      }
+      const prepared = profiles.map((p, i) => ({ p, snap: check(p, `Profile ${i + 1} in the file`) }));
+      const preparedBackups = backups.map((b, i) => ({ b, snap: check(b, `Backup ${i + 1} in the file`) }));
+      const keepKinds = new Set(['auto', 'pre_switch', 'pre_restore', 'pre_change', 'manual', 'imported']);
+      let addedProfiles = 0;
+      this.repo.transaction(() => {
+        for (const { p, snap } of prepared) {
+          let name = this.validateName(p.name);
+          if (this.nameTaken(name)) name = `${name.slice(0, MAX_NAME_LENGTH - 11)} (imported)`;
+          for (let n = 2; this.nameTaken(name); n++) name = `${p.name.slice(0, MAX_NAME_LENGTH - 14)} (imported ${n})`;
+          const preset = isValidAvatar(p.avatar_preset) ? p.avatar_preset : 'initial';
+          const colour = AVATAR_COLOURS.includes(p.avatar_colour) ? p.avatar_colour : DEFAULT_COLOUR;
+          this.repo.insertProfile({ name, avatarPreset: preset, avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot: snap });
+          addedProfiles++;
+        }
+        for (const { b, snap } of preparedBackups) {
+          const kind = keepKinds.has(b.kind) ? b.kind : 'imported';
+          const label = `${String(b.label || 'Backup').slice(0, 60)} (from export)`;
+          this.repo.insertBackup({ kind, label, stremioUserId: account.stremio_user_id, snapshot: snap });
+        }
+      });
+      this.repo.logActivity('import', `Brought back ${addedProfiles} profiles and ${preparedBackups.length} backups from an export`);
+      return { profiles: addedProfiles, backups: preparedBackups.length, skipped: (file.profiles?.length ?? 0) + (file.backups?.length ?? 0) - profiles.length - backups.length };
     });
   }
 
@@ -570,6 +734,7 @@ export class ProfilesService {
       });
       this.importStash.delete(id);
       this.repo.pruneBackups();
+      this.repo.logActivity('import', profile ? `Imported "${profile.name}" from StremShare` : 'Imported a StremShare backup');
       this.log.info('StremShare backup imported', { backupId, profileId: profile?.id ?? null });
       return { profile, backup: this.repo.getBackup(backupId) };
     });
@@ -614,29 +779,13 @@ export class ProfilesService {
   }
 
   async readLive(authKey) {
-    const [library, addons, notifs] = await Promise.all([
-      this.stremio.getLibrary(authKey),
-      this.stremio.getAddons(authKey),
-      this.stremio.getNotifs(authKey).catch((err) => {
-        this.log.warn('Notification read failed; continuing without notifications', { error: err.message });
-        return null;
-      }),
-    ]);
-    this.noteAddons(addons);
-    return {
-      library: library.filter(hasId),
-      addons,
-      notifs: notifs === null ? null : notifs.filter(hasId),
-    };
+    const live = await readLiveState(this.stremio, authKey, this.log);
+    this.noteAddons(live.addons);
+    return live;
   }
 
   checkLiveSize(live) {
-    if (live.library.length > MAX_LIBRARY_ITEMS) {
-      throw new UserError('TOO_LARGE', `The Stremio library has ${live.library.length} items (including removed ones); OpenProfiles can store up to ${MAX_LIBRARY_ITEMS}. Nothing was changed.`);
-    }
-    if (live.addons.length > MAX_ADDONS) {
-      throw new UserError('TOO_LARGE', `The account has ${live.addons.length} add-ons; OpenProfiles can store up to ${MAX_ADDONS}. Nothing was changed.`);
-    }
+    checkLiveSize(live);
   }
 
   /** Snapshots are stored exactly as Stremio returned them. Never clean them up: see isCleanTombstone. */
@@ -653,9 +802,17 @@ export class ProfilesService {
     return clean;
   }
 
+  nameTaken(name) {
+    return this.repo.listProfiles().some((p) => p.name.toLowerCase() === name.toLowerCase());
+  }
+
   assertNameFree(name) {
-    if (this.repo.listProfiles().some((p) => p.name.toLowerCase() === name.toLowerCase())) {
-      throw new UserError('NAME_TAKEN', `There's already a profile called "${name}".`);
+    if (this.nameTaken(name)) throw new UserError('NAME_TAKEN', `There's already a profile called "${name}".`);
+  }
+
+  assertRoomForProfile() {
+    if (this.repo.countProfiles() >= MAX_PROFILES) {
+      throw new UserError('TOO_MANY', `An account can have up to ${MAX_PROFILES} profiles. Delete one first.`);
     }
   }
 

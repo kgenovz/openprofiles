@@ -120,6 +120,41 @@ document.addEventListener('change', async (event) => {
   }
 });
 
+// Bring back an "everything" export: read the file and post it as JSON.
+document.addEventListener('click', async (event) => {
+  const go = event.target.closest('[data-everything-go]');
+  if (!go) return;
+  const box = go.closest('[data-everything]');
+  const status = box.querySelector('[data-everything-status]');
+  const file = box.querySelector('[data-everything-file]').files[0];
+  if (!file) {
+    status.textContent = 'Choose the export file first.';
+    return;
+  }
+  go.disabled = true;
+  status.textContent = 'Bringing it back…';
+  try {
+    const res = await fetch('/import/everything', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': box.dataset.csrf },
+      body: JSON.stringify({
+        file: JSON.parse(await file.text()),
+        passphrase: box.querySelector('[data-everything-pass]').value || null,
+        acceptOtherAccount: box.querySelector('[data-everything-other]').checked,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      location.reload();
+      return;
+    }
+    status.textContent = data.error || 'That file could not be brought back.';
+  } catch {
+    status.textContent = "That file isn't an OpenProfiles export.";
+  }
+  go.disabled = false;
+});
+
 // Back/forward cache can restore the page with buttons still disabled.
 window.addEventListener('pageshow', () => {
   document.body.classList.remove('is-busy');

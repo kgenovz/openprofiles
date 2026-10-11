@@ -7,3 +7,4 @@ secret.key
 .env
 data-dev/
 art-preview/
+data-backups/

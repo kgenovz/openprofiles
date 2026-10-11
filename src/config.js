@@ -2,6 +2,7 @@ import path from 'node:path';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 const LOG_LEVELS = new Set(['error', 'warn', 'info', 'debug']);
+const ACCESS_MODES = new Set(['owner', 'list', 'open']);
 
 export class ConfigError extends Error {
   constructor(problems) {
@@ -33,9 +34,13 @@ export function loadConfig(env = process.env) {
     }
   }
 
-  const adminPassword = env.ADMIN_PASSWORD || '';
-  if (!adminPassword) problems.push('ADMIN_PASSWORD is required');
-  else if (adminPassword.length < 8) problems.push('ADMIN_PASSWORD must be at least 8 characters');
+  // Who may sign in with their Stremio account (see core/accounts.js accessDecision).
+  const mode = (env.ACCESS || 'owner').toLowerCase();
+  if (!ACCESS_MODES.has(mode)) problems.push(`ACCESS must be one of: ${[...ACCESS_MODES].join(', ')}`);
+  const allowed = (env.ALLOWED_ACCOUNTS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (mode === 'list' && allowed.length === 0) problems.push('ACCESS=list needs ALLOWED_ACCOUNTS (Stremio emails or user ids, comma-separated)');
+  const maxAccounts = env.MAX_ACCOUNTS ? Number(env.MAX_ACCOUNTS) : Infinity;
+  if (!(maxAccounts > 0)) problems.push('MAX_ACCOUNTS must be a positive number');
 
   const port = env.PORT ? Number(env.PORT) : 7000;
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('PORT must be a port number');
@@ -47,7 +52,9 @@ export function loadConfig(env = process.env) {
 
   return {
     publicUrl,
-    adminPassword,
+    access: { mode, allowed, maxAccounts },
+    // Ignored since sign-in moved to Stremio accounts; server.js warns if it's still set.
+    legacyAdminPassword: Boolean(env.ADMIN_PASSWORD),
     port,
     logLevel,
     dataDir: path.resolve(env.DATA_DIR || './data'),

@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import express from 'express';
-import { safeEqual } from '../crypto.js';
 import { userMessageOf } from '../core/service.js';
 import { ArtCache, renderBackground, renderLogo, renderPoster } from './art.js';
 import {
@@ -47,7 +46,7 @@ function artVersion(...parts) {
  * The add-on Stremio talks to. Every route but the logo and clips sits under
  * the secret token, because opening a profile's stream switches the account.
  */
-export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_MS }) {
+export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_MS }) {
   const router = express.Router();
   const art = new ArtCache();
   const { publicUrl } = config;
@@ -59,13 +58,11 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
   };
   const noStore = (res) => res.set('Cache-Control', 'no-store');
 
-  /** Resolves the token or answers 404 (same as an unknown path, so tokens can't be probed). */
+  /** Resolves the token to its account, or answers 404 (same as an unknown path, so tokens can't be probed). */
   const withToken = (handler) => async (req, res) => {
-    const state = service.repo.getState();
-    if (!state || !service.repo.getAccount() || !safeEqual(req.params.token, state.addon_token)) {
-      return res.status(404).json({ err: 'Not found' });
-    }
-    return handler(req, res, state);
+    const hit = accounts.byAddonToken(req.params.token);
+    if (!hit) return res.status(404).json({ err: 'Not found' });
+    return handler(req, res, hit.service.repo.getState(), hit.service);
   };
 
   const base = (token) => `${publicUrl}/${token}`;
@@ -154,7 +151,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
   // Stremio's "Configure" button opens <transport base>/configure.
   router.get('/:token/configure', withToken((req, res) => res.redirect(303, '/configure')));
 
-  const catalog = withToken((req, res, state) => {
+  const catalog = withToken((req, res, state, service) => {
     noStore(res);
     if (req.params.type !== CATALOG_TYPE || req.params.id !== CATALOG_ID) return res.json({ metas: [] });
     const metas = service.repo.listProfiles().map((p) => preview(state.addon_token, p, p.id === state.active_profile_id));
@@ -163,7 +160,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
   router.get('/:token/catalog/:type/:id.json', cors, catalog);
   router.get('/:token/catalog/:type/:id/:extra.json', cors, catalog);
 
-  router.get('/:token/meta/:type/:id.json', cors, withToken((req, res, state) => {
+  router.get('/:token/meta/:type/:id.json', cors, withToken((req, res, state, service) => {
     noStore(res);
     const id = parseProfileMetaId(req.params.id);
     const p = id && service.repo.getProfile(id);
@@ -182,7 +179,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
 
   // Requesting the stream IS the switch. Stremio may ask twice (or prefetch
   // when the page opens); switchTo is idempotent, so that's harmless.
-  router.get('/:token/stream/:type/:id.json', cors, withToken(async (req, res) => {
+  router.get('/:token/stream/:type/:id.json', cors, withToken(async (req, res, state, service) => {
     noStore(res);
     const id = parseProfileMetaId(req.params.id);
     const p = id && service.repo.getProfile(id);
@@ -215,7 +212,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
     });
   }));
 
-  router.get('/:token/poster/:id.png', withToken(async (req, res, state) => {
+  router.get('/:token/poster/:id.png', withToken(async (req, res, state, service) => {
     const p = service.repo.getProfile(Number(req.params.id));
     if (!p) return res.status(404).end();
     const active = p.id === state.active_profile_id;
@@ -224,7 +221,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
     res.set('Cache-Control', 'private, max-age=86400').type('png').send(png);
   }));
 
-  router.get('/:token/background/:id.png', withToken(async (req, res) => {
+  router.get('/:token/background/:id.png', withToken(async (req, res, state, service) => {
     const p = service.repo.getProfile(Number(req.params.id));
     if (!p) return res.status(404).end();
     const png = await art.get(`bg|${p.name}|${p.avatar_colour}|${p.avatar_preset}`,

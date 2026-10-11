@@ -287,3 +287,30 @@ td { padding: 10px 6px; border-top: 1px solid var(--border); vertical-align: top
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
+
+/* Sign-in page (Phase 2 design, "Sign in with Stremio" board) */
+.signin { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 48px; padding: 32px 0; }
+.signin-pitch { flex: 0 1 440px; display: grid; gap: 18px; }
+.signin-pitch h1 { font-size: 38px; line-height: 1.1; margin: 0; }
+.signin-card { flex: 0 1 420px; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; color: var(--muted); }
+.steps li { display: flex; gap: 12px; align-items: flex-start; }
+.steps strong { color: var(--text); }
+.step-n {
+  flex: none; width: 28px; height: 28px; border-radius: 50%;
+  display: inline-grid; place-items: center;
+  background: var(--surface-2); color: var(--link); font-weight: 800;
+}
+.inline-icon { vertical-align: -2px; margin-right: 4px; }
+.fold-top { border-top: 1px solid var(--border); padding-top: 12px; }
+
+/* Account card */
+.sessions { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sessions li {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 14px;
+}
+.danger-zone > summary { color: var(--danger); }
+
+.bin { border-top: 1px solid var(--border); padding-top: 14px; display: grid; gap: 8px; }
+.bin h3 { margin: 0; font-size: 16px; }

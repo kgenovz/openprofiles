@@ -251,10 +251,93 @@ transport URLs.
      multi-arch (amd64, arm64), published by `.github/workflows/docker.yml`.
 4. **Then** set `SNAPSHOT_PROFILES_SPINOFF_URL` on StremShare prod and start the wind-down.
 
-Later maybes: multi-account instances, scheduled auto backups, resume healing v2.
+Later maybes: resume healing v2, a curated add-on list.
+
+## Phase 2 (planned 2026-10-11): accounts, safety, ease
+
+Kyle's three asks, in build order. Each is a milestone with its own tests; the design canvas gets
+the sign-in, wizard and edit-page screens before M5/M6 are built.
+
+### M4: sign in with Stremio, many accounts per server
+
+*Built 2026-10-11.* Migration 3 + the re-encryption were checked on a copy of Kyle's real local
+data first (token kept, every profile and backup decrypts).
+
+No admin password. You sign in with your Stremio email + password (sent to Stremio once for an
+authKey, never stored), and that Stremio account *is* your OpenProfiles account. One server
+holds many accounts, which is what the free hosted instance needs; a self-hosted server is just
+one with an access rule.
+
+- **Access rule** (env `ACCESS`): `owner` (default for self-hosting: the first account to sign
+  in owns the server, nobody else can sign in), `list` (only `ALLOWED_ACCOUNTS`, emails or
+  Stremio user ids), `open` (anyone; the hosted instance). `MAX_ACCOUNTS` caps `open`.
+- **Data model** (migration 3): `accounts` (id, stremio_user_id unique, email, auth_key_enc,
+  addon_token unique, active_profile_id, addon_installed, created_at, last_login_at,
+  settings_json) replaces `account` + `state`. `profiles`, `backups`, `switch_journal`,
+  `sessions` gain `account_id` (NOT NULL, FK, cascade). The existing single account migrates
+  to account 1 with its token unchanged, so installed add-ons keep working. Profile names are
+  unique per account.
+- **Keys:** each account's blobs are bound to the account id in the AES-GCM associated data
+  (`<purpose>:<accountId>`), so a blob moved between accounts won't decrypt. (Built that way
+  instead of a per-account HKDF key: the binding is what matters, and one key stays simple to
+  back up.) Pre-accounts data is re-encrypted once at boot (`core/rekey.js`, `enc_version`).
+- **Service:** one `ProfilesService` per account (cached), each with its own mutex; the add-on
+  routes resolve token → account. Everything that is "the account" today becomes "this account".
+- **Sessions:** cookie session → account; 30-day idle expiry; "Signed in on" list with sign-out
+  everywhere. An expired Stremio authKey asks you to sign in again; your profiles stay.
+- **Delete my account:** removes everything for that account after a typed confirmation and a
+  final download offer.
+
+### M5: nothing gets lost
+
+*Built 2026-10-11* (migration 4: `backups.content_hash`, `backups.profile_id`, `activity`, `meta`).
+Undo for an edit = restoring its `pre_change` backup: for a profile not in use that only puts the
+profile's saved copy back (no Stremio writes), and takes a backup of the current copy first. The
+edit tools themselves (and their "Undo" banner) arrive with M6. The SSRF guard lands with the
+add-on manager in M6, which is its first user. Daily jobs (`core/scheduler.js`) run once per UTC
+day, checked hourly and two minutes after boot.
+
+- **Automatic backups:** daily `auto` backup of each account's live state (keep 14), only when
+  something changed since the last one; plus the existing pre-switch / pre-restore ones.
+- **Undo for every write:** add-on and Cinemeta edits, profile edits and imports take a
+  `pre_change` backup (keep 20) and show "Undo" for 24 h.
+- **Deleted profiles go to a bin** for 30 days (restorable), then are purged.
+- **Download everything:** one file with every profile and backup of the account, optionally
+  passphrase-encrypted (scrypt + AES-GCM), and a matching import that restores it onto a
+  fresh server.
+- **Server snapshots:** nightly `VACUUM INTO /data/snapshots/` (7 daily + 4 weekly), plus a
+  boot check that `secret.key` matches the data (a key fingerprint stored in the DB) so a lost
+  or wrong key is caught loudly instead of corrupting writes. README: back up `/data`
+  off-site; the VPS restic job must include `~/stack/addons/openprofiles/data`.
+- **Hardening:** login rate limit per IP and per email; per-account caps (profiles 20,
+  backups by retention, upload size); SSRF guard on every add-on URL fetch (no private
+  addresses, 5 s, 512 KB); an activity log per account (sign-ins, switches, restores, edits)
+  on the account tab; `npm audit` in CI.
+
+### M6: easy to set up and use
+
+- **First run:** sign in, see your account become "Original", then the wizard offers your
+  first new profile; the install card is part of the flow, not buried.
+- **New-profile wizard:** 1 Name + picture + colour → 2 Start from (empty, copy of the account
+  now, copy of another profile) → 3 Add-ons: pick from every add-on any of your profiles has,
+  add by URL, drag or up/down to order → 4 Cinemeta: hide Popular / New / Featured, search,
+  metadata → 5 Review → Create (and optionally switch now). Nothing touches Stremio until a
+  profile is switched to (or it's the active one).
+- **Edit page, in tabs:** Profiles (the big profile row stays; picking one opens its sections:
+  Basics, Picture, Add-ons, Cinemeta, What's saved, Danger zone) · Backups · Install in
+  Stremio · Account (sessions, activity, download everything, delete).
+- **Add-on manager** (per profile): reorder, remove, add by URL, rename catalogs, health
+  check. Protected add-ons (Cinemeta, Local Files) can be reordered, not removed; OpenProfiles
+  itself is always kept. Editing the active profile also writes the live account (with a
+  `pre_change` backup).
+- **Cinemeta control** (per profile): StremShare's approach. Edit Cinemeta's manifest in the
+  list: Popular (`top`) is kept with a required `search` extra while search stays on; New
+  (`year`) and Featured (`imdbRating`) are removed; search strips the search extra; metadata
+  drops `meta` from resources (warn if no other add-on gives metadata). Never drop
+  `last-videos` / `calendar-videos`. Reset re-fetches the stock manifest (SSRF-guarded); if
+  that fails, refuse rather than half-restore.
 
 ## Open questions for Kyle
 
-- Single-tenant only for v1? (Plan assumes yes.)
-- Catalog type for the switcher row (StremShare uses its translated "all" type; pick what reads
-  best on Home in v5).
+- Default access rule for a self-hosted server: `owner` (first sign-in claims it) is the plan.
+- Hosted instance limits: `MAX_ACCOUNTS`, and whether it needs its own add-on token domain.

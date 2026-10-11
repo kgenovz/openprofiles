@@ -15,7 +15,7 @@ export class StremioError extends Error {
 }
 
 export const MESSAGES = {
-  auth: 'Stremio sign-in has expired. Sign in again on the settings page.',
+  auth: 'Stremio signed OpenProfiles out. Sign in again (your profiles are all still there).',
   badLogin: 'Stremio rejected that email or password.',
   unreachable: "Couldn't reach Stremio. Check the server's internet connection and try again.",
   busy: 'Stremio is busy. Try again in a minute.',

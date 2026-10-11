@@ -82,6 +82,7 @@ const icon = {
   check: html`<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
   alert: html`<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/></svg>`,
   pencil: html`<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>`,
+  lock: html`<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-icon"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
   plus: html`<svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
 };
 
@@ -132,47 +133,73 @@ function flashBlock(flash) {
   </div>`;
 }
 
-export function loginPage({ error }) {
+/** From the "Sign in with Stremio" board of the Phase 2 design. */
+export function signInPage({ error, notice, email = '', again = false } = {}) {
+  const steps = [
+    html`Sign in with Stremio. Your account as it is now becomes your <strong>Original</strong> profile, and a permanent backup of it is kept.`,
+    html`Make more profiles: a name and picture, the add-ons each one should have.`,
+    html`Install the add-on once. Every profile shows up on Stremio's Home; open one to switch.`,
+  ];
   return layout({
     title: 'Sign in',
-    body: html`<section class="card narrow">
-      <h1>Sign in</h1>
-      ${error ? html`<div class="flash flash-error">${icon.alert}<p>${error}</p></div>` : ''}
-      <form method="post" action="/login" class="stack">
-        <label>Admin password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
-        <button type="submit" class="primary">Sign in</button>
+    body: html`<div class="signin">
+      <section class="signin-pitch">
+        <h1>Profiles for your Stremio account</h1>
+        <p class="lede">Give everyone in the house their own library, Continue Watching and add-ons, and switch from a row on Stremio's Home.</p>
+        <ol class="steps">${steps.map((s, i) => html`<li><span class="step-n">${i + 1}</span><span>${s}</span></li>`)}</ol>
+      </section>
+      <section class="card signin-card">
+        <h2>${again ? 'Sign in to Stremio again' : 'Sign in with Stremio'}</h2>
+        ${again ? html`<p class="hint">Stremio signed OpenProfiles out. Sign in again; your profiles are all still here.</p>` : ''}
+        ${notice ? html`<div class="flash flash-ok">${icon.check}<p>${notice}</p></div>` : ''}
+        ${error ? html`<div class="flash flash-error" role="alert">${icon.alert}<p>${error}</p></div>` : ''}
+        <form method="post" action="/signin" class="stack">
+          <label>Stremio email <input type="email" name="email" value="${email}" autocomplete="username" required ${email ? '' : 'autofocus'}></label>
+          <label>Stremio password <input type="password" name="password" autocomplete="current-password" required ${email ? 'autofocus' : ''}></label>
+          <button type="submit" class="primary">Sign in</button>
+        </form>
+        <p class="hint">${icon.lock} Your password goes to Stremio once to get a sign-in key, and is never stored. OpenProfiles only changes your own account.</p>
+        <p class="hint fold-top">Have Stremio Supporter? It has built-in profiles that work on several devices at once; use those instead.</p>
+      </section>
+    </div>`,
+  });
+}
+
+const deviceName = (ua = '') => {
+  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows'
+    : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : 'Unknown device';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome'
+    : /Safari\//.test(ua) ? 'Safari' : 'browser';
+  return `${os} · ${browser}`;
+};
+
+function accountCard(account, sessions, csrf) {
+  return html`<section class="card" id="account">
+    <div class="card-head">
+      <h2>Your account</h2>
+      <span class="hint">Signed in with Stremio as ${account.email}</span>
+    </div>
+    <p class="hint">Your Stremio password isn't stored. If Stremio signs OpenProfiles out, <a href="/signin?again=1">sign in again</a>; your profiles stay.</p>
+    <div class="card-head">
+      <h3>Where you're signed in</h3>
+      ${sessions.length > 1 ? postButton({ action: '/account/sessions/others/signout', csrf, label: 'Sign out everywhere else', style: 'link' }) : ''}
+    </div>
+    <ul class="sessions">
+      ${sessions.map((s) => html`<li>
+        <span><strong>${deviceName(s.user_agent)}</strong> <span class="hint">· last seen ${when(s.last_seen_at)}</span></span>
+        ${s.current ? html`<span class="status status-ok">This device</span>` : postButton({ action: `/account/sessions/${s.id}/signout`, csrf, label: 'Sign out', style: 'link' })}
+      </li>`)}
+    </ul>
+    <details class="fold danger-zone">
+      <summary>Delete my OpenProfiles account</summary>
+      <p class="hint">Removes your profiles and backups from this server. Your Stremio account stays exactly as it is right now. Download any backups you want to keep first.</p>
+      <form method="post" action="/account/delete" class="row align-end">
+        ${csrfField(csrf)}
+        <label class="grow">Type DELETE to confirm <input name="confirm" autocomplete="off"></label>
+        <button type="submit" class="danger">Delete account</button>
       </form>
-    </section>`,
-  });
-}
-
-function stremioSignInForm(csrf, { renew = false } = {}) {
-  return html`<form method="post" action="/account/link" class="stack">
-    ${csrfField(csrf)}
-    <label>Stremio email <input type="email" name="email" autocomplete="username" required></label>
-    <label>Stremio password <input type="password" name="password" autocomplete="current-password" required></label>
-    <p class="hint">Your password goes to Stremio once to get a sign-in key, and is never stored.</p>
-    <button type="submit" class="primary">${renew ? 'Sign in again' : 'Connect Stremio account'}</button>
-  </form>`;
-}
-
-export function setupPage({ csrf, flash }) {
-  return layout({
-    title: 'Set up',
-    csrf,
-    body: html`${flashBlock(flash)}
-    <section class="card narrow">
-      <h1>Connect your Stremio account</h1>
-      <p>OpenProfiles gives one Stremio account several profiles. Each profile keeps its own library,
-        add-ons and notifications. Switching saves the current state into the profile you're leaving
-        and loads the one you pick.</p>
-      <p>Your account as it is right now becomes the <strong>Original</strong> profile, and a
-        permanent backup of it is kept.</p>
-      <p class="hint">Stremio Supporter accounts have built-in profiles that work on several devices
-        at once. If you have that, use it instead.</p>
-      ${stremioSignInForm(csrf)}
-    </section>`,
-  });
+    </details>
+  </section>`;
 }
 
 function recoveryBanner(j, csrf) {
@@ -289,7 +316,46 @@ function importCard(csrf) {
   </section>`;
 }
 
-export function dashboardPage({ csrf, flash, status, backups, journal, addon }) {
+function binBlock(bin, csrf) {
+  if (!bin.length) return '';
+  return html`<div class="bin">
+    <h3>Bin <span class="hint">· deleted profiles, kept 30 days</span></h3>
+    <ul class="sessions">
+      ${bin.map((p) => html`<li>
+        <span><strong>${p.name}</strong> <span class="hint">· deleted ${when(p.deleted_at)}, gone for good ${when(p.purgeAt)}</span></span>
+        ${postButton({ action: `/bin/${p.id}/restore`, csrf, label: 'Bring back', style: 'link' })}
+      </li>`)}
+    </ul>
+  </div>`;
+}
+
+/** Download everything / bring it back. The import runs through app.js (it uploads the file as JSON). */
+function everythingCard(csrf) {
+  return html`<section class="card" id="everything">
+    <h2>Everything in one file</h2>
+    <p class="lede">Every profile and backup of your account, to keep somewhere safe or to move to another
+      OpenProfiles server. Add a passphrase to lock the file; without it, anyone with the file can read your
+      add-on links and watch history.</p>
+    <form method="post" action="/export" class="row align-end">
+      ${csrfField(csrf)}
+      <label class="grow">Passphrase (optional) <input type="password" name="passphrase" autocomplete="new-password" minlength="8"></label>
+      <button type="submit">Download everything</button>
+    </form>
+    <details class="fold">
+      <summary>Bring back from a file</summary>
+      <p class="hint">Adds the file's profiles (renamed if a name is taken) and keeps its backups. Nothing in Stremio changes.</p>
+      <div class="stack" data-everything data-csrf="${csrf}">
+        <label>Export file <input type="file" accept=".json,application/json" data-everything-file></label>
+        <label>Passphrase (if the file has one) <input type="password" data-everything-pass autocomplete="off"></label>
+        <label class="radio"><input type="checkbox" data-everything-other> It's from a different Stremio account, and I want it here anyway</label>
+        <button type="button" class="primary" data-everything-go>Bring back</button>
+        <p class="hint" role="status" data-everything-status></p>
+      </div>
+    </details>
+  </section>`;
+}
+
+export function dashboardPage({ csrf, flash, status, backups, bin = [], activity = [], addon, sessions = [] }) {
   const { account, profiles, activeProfileId, openJournal } = status;
   const locked = Boolean(openJournal);
   return layout({
@@ -337,8 +403,8 @@ export function dashboardPage({ csrf, flash, status, backups, journal, addon }) 
           <button type="submit">Back up now</button>
         </form>
       </div>
-      <p class="hint">Taken automatically before every switch and restore. Downloads contain your add-on
-        links, which can include debrid keys: keep them private.</p>
+      <p class="hint">Taken automatically every day, and before every switch, restore and edit. Downloads
+        contain your add-on links, which can include debrid keys: keep them private.</p>
       <div class="table-wrap"><table>
         <thead><tr><th>When</th><th>What</th><th>Contents</th><th><span class="sr-only">Actions</span></th></tr></thead>
         <tbody>
@@ -354,28 +420,21 @@ export function dashboardPage({ csrf, flash, status, backups, journal, addon }) 
           </tr>`)}
         </tbody>
       </table></div>
+      ${binBlock(bin, csrf)}
     </section>
+
+    ${everythingCard(csrf)}
 
     ${importCard(csrf)}
 
     <section class="card">
-      <h2>Recent activity</h2>
-      ${journal.length === 0 ? html`<p class="hint">No switches yet.</p>` : html`<ul class="activity">
-        ${journal.map((j) => html`<li>
-          <span class="hint">${when(j.started_at)}</span>
-          <span>${j.kind === 'switch' ? 'Switch' : 'Restore'}: ${j.status === 'open' ? 'unfinished' : j.status === 'rolled_back' ? 'rolled back' : 'done'}</span>
-          ${j.warnings.length ? html`<span class="hint">${j.warnings.join(' ')}</span>` : ''}
-        </li>`)}
+      <h2>Activity</h2>
+      ${activity.length === 0 ? html`<p class="hint">Nothing yet.</p>` : html`<ul class="activity">
+        ${activity.map((a) => html`<li><span class="hint">${when(a.at)}</span><span>${a.detail}</span></li>`)}
       </ul>`}
     </section>
 
-    <section class="card">
-      <h2>Stremio sign-in</h2>
-      <details class="fold">
-        <summary>Sign in to Stremio again (if switching says the sign-in expired)</summary>
-        ${stremioSignInForm(csrf, { renew: true })}
-      </details>
-    </section>`,
+    ${accountCard(account, sessions, csrf)}`,
   });
 }
 

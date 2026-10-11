@@ -1,50 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { GuardError } from '../src/core/guard.js';
-import { NATIVE_PROFILES_WARNING, UserError } from '../src/core/service.js';
+import { UserError } from '../src/core/service.js';
 import { addon, libItem, notif } from './helpers/fakeStremio.js';
-import { linkedWithKids, makeService, seededFake } from './helpers/setup.js';
-
-describe('linkAccount', () => {
-  it('creates "Original" from the live account plus the permanent original backup', async () => {
-    const { service, repo, fake } = makeService({ fake: seededFake() });
-    const { created } = await service.linkAccount('kyle@example.com', 'hunter22');
-    assert.equal(created, true);
-    const [original] = repo.listProfiles();
-    assert.equal(original.name, 'Original');
-    assert.equal(original.library_count, 2);
-    assert.equal(original.addon_count, 2);
-    assert.equal(original.notif_count, 1);
-    assert.equal(repo.getState().active_profile_id, original.id);
-    assert.deepEqual(repo.listBackups().map((b) => b.kind), ['original']);
-    assert.equal(fake.callCount('datastorePut'), 0, 'setup never writes to Stremio');
-    assert.equal(fake.callCount('addonCollectionSet'), 0);
-  });
-
-  it('refuses a child-profile key and warns about native profiles', async () => {
-    const child = makeService({ fake: seededFake() });
-    child.fake.user.parent_id = 'master';
-    await assert.rejects(child.service.linkAccount('kyle@example.com', 'hunter22'), (e) => e.code === 'CHILD_PROFILE');
-
-    const supporter = makeService({ fake: seededFake() });
-    supporter.fake.user.premiumPrefs = { userProfiles: { 'user-1': { name: 'Me' }, p2: { name: 'Kid' } } };
-    const { warnings } = await supporter.service.linkAccount('kyle@example.com', 'hunter22');
-    assert.deepEqual(warnings, [NATIVE_PROFILES_WARNING]);
-  });
-
-  it('renews the key for the same account and refuses a different account', async () => {
-    const { service, repo, fake } = makeService({ fake: seededFake() });
-    await service.linkAccount('kyle@example.com', 'hunter22');
-    fake.authKey = 'n'.repeat(40);
-    const { created } = await service.linkAccount('kyle@example.com', 'hunter22');
-    assert.equal(created, false);
-    assert.equal(repo.getAuthKey(), 'n'.repeat(40));
-    assert.equal(repo.listProfiles().length, 1);
-
-    fake.user._id = 'someone-else';
-    await assert.rejects(service.linkAccount('kyle@example.com', 'hunter22'), (e) => e.code === 'OTHER_ACCOUNT');
-  });
-});
+import { linkedWithKids } from './helpers/setup.js';
 
 describe('switchTo', () => {
   it('swaps library, add-ons and notifications, saves the outgoing profile and flips the pointer', async () => {
@@ -89,7 +48,7 @@ describe('switchTo', () => {
   });
 
   it('keeps Continue Watching for things played without adding them to the library', async () => {
-    const { service, repo, cipher, fake, kids, original } = await linkedWithKids();
+    const { service, repo, fake, kids, original } = await linkedWithKids();
     // How Stremio stores a show you played from Discover: removed + temp, with progress.
     const got = libItem('tt0944947', { name: 'Game of Thrones', removed: true, temp: true, timeOffset: 1_800_000, lastWatched: '2026-10-09T19:54:37.947666Z' });
     got.state.watched = 'tt0944947:1:3:eJxjYGBgAAAABAAB';
@@ -101,7 +60,7 @@ describe('switchTo', () => {
     assert.equal(hidden.temp, false, 'hidden from Kids');
     assert.equal(hidden.state.timeOffset, 0);
 
-    const saved = cipher.decryptJson(repo.getProfileRow(original.id).library_enc, 'library').find((i) => i._id === 'tt0944947');
+    const saved = repo.cipher.decryptJson(repo.getProfileRow(original.id).library_enc, 'library').find((i) => i._id === 'tt0944947');
     assert.deepEqual(saved, before, 'the outgoing snapshot keeps it exactly as Stremio had it');
 
     await service.switchTo(original.id);

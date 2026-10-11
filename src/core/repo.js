@@ -1,23 +1,50 @@
+import crypto from 'node:crypto';
+import { randomToken } from '../crypto.js';
 import { countActive } from './library.js';
 
 export const BACKUP_RETENTION = {
   original: Infinity,
-  auto: 7,
+  auto: 14,
   pre_switch: 5,
   pre_restore: 3,
+  pre_change: 20,
   manual: 10,
   imported: 10,
 };
 
 const PROFILE_META = `id, name, avatar_preset, avatar_colour, library_count, addon_count, notif_count,
   snapshot_taken_at, stremio_user_id, created_at`;
-const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at`;
+const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at, profile_id`;
+const ACTIVITY_KEEP = 200;
 
-/** All SQL lives here. Blobs are encrypted on the way in; callers decode via guard.js. */
-export class Repo {
-  constructor(db, cipher, now = () => Date.now()) {
+/** Stable fingerprint of a snapshot's content, to tell whether anything changed since a backup. */
+export function snapshotHash({ library, addons, notifs }) {
+  return crypto.createHash('sha256').update(JSON.stringify([library, addons, notifs ?? null])).digest('hex');
+}
+const ACCOUNT_COLUMNS = `id, stremio_user_id, stremio_email, auth_key_enc, addon_token, active_profile_id,
+  addon_installed, enc_version, created_at, last_login_at, created_at AS linked_at`;
+
+/**
+ * Encryption bound to one account: every blob's associated data carries the
+ * account id, so a blob copied into another account's rows won't decrypt.
+ */
+export function accountCipher(cipher, accountId) {
+  return {
+    encryptJson: (value, purpose) => cipher.encryptJson(value, `${purpose}:${accountId}`),
+    decryptJson: (blob, purpose) => cipher.decryptJson(blob, `${purpose}:${accountId}`),
+  };
+}
+
+/**
+ * All SQL for one account. Every query is scoped to `accountId`, so nothing
+ * here can read or write another account's rows. Blobs are encrypted on the
+ * way in; callers decode via guard.js using `this.cipher`.
+ */
+export class AccountRepo {
+  constructor(db, cipher, accountId, now = () => Date.now()) {
     this.db = db;
-    this.cipher = cipher;
+    this.accountId = accountId;
+    this.cipher = accountCipher(cipher, accountId);
     this.now = now;
   }
 
@@ -39,17 +66,12 @@ export class Repo {
   // ── account ──────────────────────────────────────────────────────────────
 
   getAccount() {
-    return this.db.prepare('SELECT * FROM account WHERE id = 1').get() || null;
-  }
-
-  insertAccount({ stremioUserId, email, authKey }) {
-    this.db.prepare(`INSERT INTO account (id, stremio_user_id, stremio_email, auth_key_enc, linked_at)
-      VALUES (1, ?, ?, ?, ?)`).run(stremioUserId, email, this.cipher.encryptJson(authKey, 'authkey'), this.now());
+    return this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE id = ?`).get(this.accountId) || null;
   }
 
   updateAuthKey({ email, authKey }) {
-    this.db.prepare('UPDATE account SET stremio_email = ?, auth_key_enc = ?, linked_at = ? WHERE id = 1')
-      .run(email, this.cipher.encryptJson(authKey, 'authkey'), this.now());
+    this.db.prepare('UPDATE accounts SET stremio_email = ?, auth_key_enc = ?, last_login_at = ? WHERE id = ?')
+      .run(email, this.cipher.encryptJson(authKey, 'authkey'), this.now(), this.accountId);
   }
 
   getAuthKey() {
@@ -57,52 +79,52 @@ export class Repo {
     return row ? this.cipher.decryptJson(row.auth_key_enc, 'authkey') : null;
   }
 
-  // ── state ────────────────────────────────────────────────────────────────
+  // ── state (lives on the account row) ─────────────────────────────────────
 
   getState() {
-    return this.db.prepare('SELECT * FROM state WHERE id = 1').get() || null;
-  }
-
-  initState({ activeProfileId, addonToken }) {
-    this.db.prepare('INSERT INTO state (id, active_profile_id, addon_token) VALUES (1, ?, ?)').run(activeProfileId, addonToken);
+    return this.db.prepare('SELECT active_profile_id, addon_token, addon_installed FROM accounts WHERE id = ?')
+      .get(this.accountId) || null;
   }
 
   setActiveProfile(id) {
-    this.db.prepare('UPDATE state SET active_profile_id = ? WHERE id = 1').run(id);
+    this.db.prepare('UPDATE accounts SET active_profile_id = ? WHERE id = ?').run(id, this.accountId);
   }
 
   setAddonToken(token) {
-    this.db.prepare('UPDATE state SET addon_token = ? WHERE id = 1').run(token);
+    this.db.prepare('UPDATE accounts SET addon_token = ? WHERE id = ?').run(token, this.accountId);
   }
 
   setAddonInstalled(installed) {
-    this.db.prepare('UPDATE state SET addon_installed = ? WHERE id = 1').run(installed ? 1 : 0);
+    this.db.prepare('UPDATE accounts SET addon_installed = ? WHERE id = ?').run(installed ? 1 : 0, this.accountId);
   }
 
   // ── profiles ─────────────────────────────────────────────────────────────
 
   listProfiles() {
-    return this.db.prepare(`SELECT ${PROFILE_META} FROM profiles ORDER BY created_at, id`).all();
+    return this.db.prepare(`SELECT ${PROFILE_META} FROM profiles
+      WHERE account_id = ? AND deleted_at IS NULL ORDER BY created_at, id`).all(this.accountId);
   }
 
   getProfile(id) {
-    return this.db.prepare(`SELECT ${PROFILE_META} FROM profiles WHERE id = ?`).get(id) || null;
+    return this.db.prepare(`SELECT ${PROFILE_META} FROM profiles
+      WHERE id = ? AND account_id = ? AND deleted_at IS NULL`).get(id, this.accountId) || null;
   }
 
   /** Includes the encrypted blobs. */
   getProfileRow(id) {
-    return this.db.prepare('SELECT * FROM profiles WHERE id = ?').get(id) || null;
+    return this.db.prepare('SELECT * FROM profiles WHERE id = ? AND account_id = ? AND deleted_at IS NULL')
+      .get(id, this.accountId) || null;
   }
 
   insertProfile({ name, avatarPreset, avatarColour, stremioUserId, snapshot }) {
     const enc = this.encodeSnapshot(snapshot);
     const now = this.now();
     const info = this.db.prepare(`INSERT INTO profiles
-      (name, avatar_preset, avatar_colour, library_enc, addons_enc, notifs_enc, library_count, addon_count,
+      (account_id, name, avatar_preset, avatar_colour, library_enc, addons_enc, notifs_enc, library_count, addon_count,
        notif_count, snapshot_taken_at, stremio_user_id, created_at)
-      VALUES (@name, @avatarPreset, @avatarColour, @library_enc, @addons_enc, @notifs_enc, @library_count,
+      VALUES (@accountId, @name, @avatarPreset, @avatarColour, @library_enc, @addons_enc, @notifs_enc, @library_count,
        @addon_count, @notif_count, @now, @stremioUserId, @now)`)
-      .run({ name, avatarPreset, avatarColour, stremioUserId, now, ...enc });
+      .run({ accountId: this.accountId, name, avatarPreset, avatarColour, stremioUserId, now, ...enc });
     return Number(info.lastInsertRowid);
   }
 
@@ -113,52 +135,105 @@ export class Repo {
     this.db.prepare(`UPDATE profiles SET library_enc = @library_enc, addons_enc = @addons_enc,
         library_count = @library_count, addon_count = @addon_count, snapshot_taken_at = @now
         ${keepNotifs ? '' : ', notifs_enc = @notifs_enc, notif_count = @notif_count'}
-      WHERE id = @id`).run({ id, now: this.now(), ...enc });
+      WHERE id = @id AND account_id = @accountId`).run({ id, accountId: this.accountId, now: this.now(), ...enc });
   }
 
   renameProfile(id, name) {
-    this.db.prepare('UPDATE profiles SET name = ? WHERE id = ?').run(name, id);
+    this.db.prepare('UPDATE profiles SET name = ? WHERE id = ? AND account_id = ?').run(name, id, this.accountId);
   }
 
   setProfileAvatar(id, preset, colour) {
-    this.db.prepare('UPDATE profiles SET avatar_preset = ?, avatar_colour = ? WHERE id = ?').run(preset, colour, id);
+    this.db.prepare('UPDATE profiles SET avatar_preset = ?, avatar_colour = ? WHERE id = ? AND account_id = ?')
+      .run(preset, colour, id, this.accountId);
   }
 
-  deleteProfile(id) {
-    this.db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
+  countProfiles() {
+    return this.db.prepare('SELECT COUNT(*) AS n FROM profiles WHERE account_id = ? AND deleted_at IS NULL').get(this.accountId).n;
+  }
+
+  // ── the bin (deleted profiles, kept BIN_DAYS) ────────────────────────────
+
+  moveProfileToBin(id) {
+    this.db.prepare('UPDATE profiles SET deleted_at = ? WHERE id = ? AND account_id = ? AND deleted_at IS NULL')
+      .run(this.now(), id, this.accountId);
+  }
+
+  listBin() {
+    return this.db.prepare(`SELECT ${PROFILE_META}, deleted_at FROM profiles
+      WHERE account_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`).all(this.accountId);
+  }
+
+  getBinProfile(id) {
+    return this.db.prepare(`SELECT ${PROFILE_META}, deleted_at FROM profiles
+      WHERE id = ? AND account_id = ? AND deleted_at IS NOT NULL`).get(id, this.accountId) || null;
+  }
+
+  restoreProfileFromBin(id, name) {
+    this.db.prepare('UPDATE profiles SET deleted_at = NULL, name = ? WHERE id = ? AND account_id = ?').run(name, id, this.accountId);
+  }
+
+  /** Permanently remove bin entries deleted before `before` (ms). Returns how many. */
+  purgeBin(before) {
+    return this.db.prepare('DELETE FROM profiles WHERE account_id = ? AND deleted_at IS NOT NULL AND deleted_at < ?')
+      .run(this.accountId, before).changes;
+  }
+
+  // ── activity log ─────────────────────────────────────────────────────────
+
+  logActivity(kind, detail) {
+    this.db.prepare('INSERT INTO activity (account_id, at, kind, detail) VALUES (?, ?, ?, ?)')
+      .run(this.accountId, this.now(), kind, String(detail).slice(0, 300));
+    this.db.prepare(`DELETE FROM activity WHERE account_id = ? AND id NOT IN
+      (SELECT id FROM activity WHERE account_id = ? ORDER BY id DESC LIMIT ${ACTIVITY_KEEP})`).run(this.accountId, this.accountId);
+  }
+
+  listActivity(limit = 30) {
+    return this.db.prepare('SELECT at, kind, detail FROM activity WHERE account_id = ? ORDER BY id DESC LIMIT ?')
+      .all(this.accountId, limit);
   }
 
   // ── backups ──────────────────────────────────────────────────────────────
 
-  insertBackup({ kind, label, stremioUserId, snapshot }) {
+  /** `profileId`: for pre_change backups, the profile whose saved state this is (undo puts it back there). */
+  insertBackup({ kind, label, stremioUserId, snapshot, profileId = null }) {
     const enc = this.encodeSnapshot(snapshot);
     const info = this.db.prepare(`INSERT INTO backups
-      (kind, label, library_enc, addons_enc, notifs_enc, library_count, addon_count, notif_count, stremio_user_id, created_at)
-      VALUES (@kind, @label, @library_enc, @addons_enc, @notifs_enc, @library_count, @addon_count, @notif_count,
-       @stremioUserId, @now)`)
-      .run({ kind, label, stremioUserId, now: this.now(), ...enc });
+      (account_id, kind, label, library_enc, addons_enc, notifs_enc, library_count, addon_count, notif_count,
+       stremio_user_id, created_at, content_hash, profile_id)
+      VALUES (@accountId, @kind, @label, @library_enc, @addons_enc, @notifs_enc, @library_count, @addon_count,
+       @notif_count, @stremioUserId, @now, @contentHash, @profileId)`)
+      .run({ accountId: this.accountId, kind, label, stremioUserId, now: this.now(), contentHash: snapshotHash(snapshot), profileId, ...enc });
     return Number(info.lastInsertRowid);
   }
 
+  /** Newest backup of a kind (metadata and hash only), or null. */
+  latestBackup(kind) {
+    return this.db.prepare(`SELECT ${BACKUP_META}, content_hash FROM backups WHERE account_id = ? AND kind = ?
+      ORDER BY created_at DESC, id DESC LIMIT 1`).get(this.accountId, kind) || null;
+  }
+
   listBackups() {
-    return this.db.prepare(`SELECT ${BACKUP_META} FROM backups ORDER BY created_at DESC, id DESC`).all();
+    return this.db.prepare(`SELECT ${BACKUP_META} FROM backups WHERE account_id = ?
+      ORDER BY created_at DESC, id DESC`).all(this.accountId);
   }
 
   getBackup(id) {
-    return this.db.prepare(`SELECT ${BACKUP_META} FROM backups WHERE id = ?`).get(id) || null;
+    return this.db.prepare(`SELECT ${BACKUP_META} FROM backups WHERE id = ? AND account_id = ?`)
+      .get(id, this.accountId) || null;
   }
 
   getBackupRow(id) {
-    return this.db.prepare('SELECT * FROM backups WHERE id = ?').get(id) || null;
+    return this.db.prepare('SELECT * FROM backups WHERE id = ? AND account_id = ?').get(id, this.accountId) || null;
   }
 
   deleteBackup(id) {
-    this.db.prepare('DELETE FROM backups WHERE id = ?').run(id);
+    this.db.prepare('DELETE FROM backups WHERE id = ? AND account_id = ?').run(id, this.accountId);
   }
 
   /** Backups an open journal row may still need for recovery. */
   pinnedBackupIds() {
-    const rows = this.db.prepare(`SELECT target_backup_id, rollback_backup_id FROM switch_journal WHERE status = 'open'`).all();
+    const rows = this.db.prepare(`SELECT target_backup_id, rollback_backup_id FROM switch_journal
+      WHERE account_id = ? AND status = 'open'`).all(this.accountId);
     return new Set(rows.flatMap((r) => [r.target_backup_id, r.rollback_backup_id]).filter((id) => id != null));
   }
 
@@ -168,7 +243,8 @@ export class Repo {
     let deleted = 0;
     for (const [kind, keep] of Object.entries(BACKUP_RETENTION)) {
       if (keep === Infinity) continue;
-      const rows = this.db.prepare('SELECT id FROM backups WHERE kind = ? ORDER BY created_at DESC, id DESC').all(kind);
+      const rows = this.db.prepare(`SELECT id FROM backups WHERE account_id = ? AND kind = ?
+        ORDER BY created_at DESC, id DESC`).all(this.accountId, kind);
       for (const { id } of rows.slice(keep)) {
         if (pinned.has(id)) continue;
         this.deleteBackup(id);
@@ -182,32 +258,79 @@ export class Repo {
 
   startJournal({ kind, fromProfileId, toProfileId, targetBackupId = null, rollbackBackupId }) {
     const info = this.db.prepare(`INSERT INTO switch_journal
-      (kind, from_profile_id, to_profile_id, target_backup_id, rollback_backup_id, phase, status, started_at)
-      VALUES (?, ?, ?, ?, ?, 'saved', 'open', ?)`)
-      .run(kind, fromProfileId, toProfileId, targetBackupId, rollbackBackupId, this.now());
+      (account_id, kind, from_profile_id, to_profile_id, target_backup_id, rollback_backup_id, phase, status, started_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'saved', 'open', ?)`)
+      .run(this.accountId, kind, fromProfileId, toProfileId, targetBackupId, rollbackBackupId, this.now());
     return Number(info.lastInsertRowid);
   }
 
   setJournalPhase(id, phase) {
-    this.db.prepare('UPDATE switch_journal SET phase = ? WHERE id = ?').run(phase, id);
+    this.db.prepare('UPDATE switch_journal SET phase = ? WHERE id = ? AND account_id = ?').run(phase, id, this.accountId);
   }
 
   failJournal(id, error) {
-    this.db.prepare('UPDATE switch_journal SET error = ? WHERE id = ?').run(String(error).slice(0, 500), id);
+    this.db.prepare('UPDATE switch_journal SET error = ? WHERE id = ? AND account_id = ?')
+      .run(String(error).slice(0, 500), id, this.accountId);
   }
 
   closeJournal(id, status, warnings = []) {
-    this.db.prepare(`UPDATE switch_journal SET status = ?, phase = 'done', finished_at = ?, error = NULL, warnings = ? WHERE id = ?`)
-      .run(status, this.now(), JSON.stringify(warnings), id);
+    this.db.prepare(`UPDATE switch_journal SET status = ?, phase = 'done', finished_at = ?, error = NULL, warnings = ?
+      WHERE id = ? AND account_id = ?`).run(status, this.now(), JSON.stringify(warnings), id, this.accountId);
   }
 
   getOpenJournal() {
-    const row = this.db.prepare(`SELECT * FROM switch_journal WHERE status = 'open' ORDER BY id DESC LIMIT 1`).get();
+    const row = this.db.prepare(`SELECT * FROM switch_journal WHERE account_id = ? AND status = 'open'
+      ORDER BY id DESC LIMIT 1`).get(this.accountId);
     return row ? { ...row, warnings: JSON.parse(row.warnings) } : null;
   }
 
   recentJournal(limit = 10) {
-    return this.db.prepare('SELECT * FROM switch_journal ORDER BY id DESC LIMIT ?').all(limit)
+    return this.db.prepare('SELECT * FROM switch_journal WHERE account_id = ? ORDER BY id DESC LIMIT ?')
+      .all(this.accountId, limit)
       .map((row) => ({ ...row, warnings: JSON.parse(row.warnings) }));
+  }
+}
+
+/** Server-wide account rows: sign-in lookup, add-on token lookup, creation and deletion. */
+export class Accounts {
+  constructor(db, cipher, now = () => Date.now()) {
+    this.db = db;
+    this.cipher = cipher;
+    this.now = now;
+  }
+
+  count() {
+    return this.db.prepare('SELECT COUNT(*) AS n FROM accounts').get().n;
+  }
+
+  byStremioUserId(stremioUserId) {
+    return this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE stremio_user_id = ?`).get(stremioUserId) || null;
+  }
+
+  byId(id) {
+    return this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE id = ?`).get(id) || null;
+  }
+
+  byAddonToken(token) {
+    if (typeof token !== 'string' || token.length < 16) return null;
+    return this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE addon_token = ?`).get(token) || null;
+  }
+
+  /** Inserts the row only; call inside the transaction that also creates the first profile. */
+  insert({ stremioUserId, email, authKey }) {
+    const now = this.now();
+    const info = this.db.prepare(`INSERT INTO accounts
+      (stremio_user_id, stremio_email, auth_key_enc, addon_token, enc_version, created_at, last_login_at)
+      VALUES (?, ?, X'00', ?, 2, ?, ?)`).run(stremioUserId, email, randomToken(), now, now);
+    const id = Number(info.lastInsertRowid);
+    // The auth key is bound to the new id, so it can only be encrypted once the id exists.
+    this.db.prepare('UPDATE accounts SET auth_key_enc = ? WHERE id = ?')
+      .run(accountCipher(this.cipher, id).encryptJson(authKey, 'authkey'), id);
+    return id;
+  }
+
+  /** Everything for the account goes with it (foreign keys cascade). */
+  delete(id) {
+    this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
   }
 }

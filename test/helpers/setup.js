@@ -2,27 +2,38 @@ import crypto from 'node:crypto';
 import { createSelfAddon } from '../../src/addon/manifest.js';
 import { Cipher } from '../../src/crypto.js';
 import { openDatabase } from '../../src/db.js';
-import { Repo } from '../../src/core/repo.js';
-import { ProfilesService } from '../../src/core/service.js';
+import { AccountsService } from '../../src/core/accounts.js';
 import { StremioClient } from '../../src/stremio/client.js';
 import { FakeStremio, addon, libItem, notif } from './fakeStremio.js';
 
 export const noSleep = async () => {};
 
-/** A service wired to an in-memory database and a fake Stremio. */
 export const PUBLIC_URL = 'https://profiles.example.com';
 
-/** A service wired to an in-memory database and a fake Stremio. `withAddon` turns on the M2 self-insert. */
-export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32), withAddon = false } = {}) {
+/**
+ * An AccountsService on an in-memory database and a fake Stremio.
+ * `ctx.signIn()` signs in to the fake (creating the account the first time)
+ * and points `ctx.service` / `ctx.repo` at that account.
+ * `withAddon` turns on the M2 self-insert. `access` is the sign-in rule.
+ */
+export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32), withAddon = false, access = { mode: 'owner' } } = {}) {
   const db = openDatabase(null, { filename: ':memory:' });
   const cipher = new Cipher(key);
   let clock = Date.parse('2026-10-10T12:00:00.000Z');
   const now = () => (clock += 1000);
-  const repo = new Repo(db, cipher, now);
   const stremio = new StremioClient({ fetchImpl: fake.fetch, sleep: noSleep });
   const selfAddon = withAddon ? createSelfAddon({ publicUrl: PUBLIC_URL }) : null;
-  const service = new ProfilesService({ repo, stremio, sleep: noSleep, now, selfAddon });
-  return { fake, db, cipher, repo, stremio, service };
+  const accounts = new AccountsService({ db, cipher, stremio, sleep: noSleep, now, selfAddon, access });
+  const ctx = {
+    fake, db, cipher, stremio, accounts, service: null, repo: null,
+    async signIn(email = fake.user.email, password = fake.password) {
+      const result = await accounts.signIn(email, password);
+      ctx.service = accounts.forAccount(result.accountId);
+      ctx.repo = ctx.service.repo;
+      return result;
+    },
+  };
+  return ctx;
 }
 
 /** Account with a two-show library, two add-ons and one notification. */
@@ -37,10 +48,10 @@ export function seededFake(opts) {
   });
 }
 
-/** Linked service with "Original" active and an empty "Kids" profile. */
+/** Signed-in account with "Original" active and an empty "Kids" profile. */
 export async function linkedWithKids(opts = {}) {
   const ctx = makeService({ fake: seededFake(), ...opts });
-  await ctx.service.linkAccount('kyle@example.com', 'hunter22');
+  await ctx.signIn();
   const kids = await ctx.service.createProfile({ name: 'Kids', from: 'empty' });
   const original = ctx.repo.listProfiles().find((p) => p.name === 'Original');
   return { ...ctx, kids, original };

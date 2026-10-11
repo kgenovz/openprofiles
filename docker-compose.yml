@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       PUBLIC_URL: https://profiles.example.com   # the https address Stremio will use
-      ADMIN_PASSWORD: change-me-to-something-long
+      ACCESS: owner                              # the first Stremio account to sign in owns this server
       # LOG_LEVEL: info
     volumes:
       - openprofiles-data:/data                  # database + secret key: back this up

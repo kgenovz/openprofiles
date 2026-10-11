@@ -3,8 +3,10 @@ import { createSelfAddon } from './addon/manifest.js';
 import { ConfigError, loadConfig } from './config.js';
 import { Cipher, loadOrCreateKey } from './crypto.js';
 import { openDatabase } from './db.js';
-import { Repo } from './core/repo.js';
-import { ProfilesService } from './core/service.js';
+import { AccountsService } from './core/accounts.js';
+import { WrongKeyError, checkSecretKey } from './core/keycheck.js';
+import { upgradeLegacyEncryption } from './core/rekey.js';
+import { startScheduler } from './core/scheduler.js';
 import { createLogger } from './log.js';
 import { StremioClient } from './stremio/client.js';
 import { createApp } from './web/app.js';
@@ -23,32 +25,50 @@ function main() {
     throw err;
   }
   const log = createLogger(config.logLevel);
+  if (config.legacyAdminPassword) {
+    log.warn('ADMIN_PASSWORD is no longer used: people sign in with their Stremio account. Remove it from your settings.');
+  }
 
   fs.mkdirSync(config.dataDir, { recursive: true });
-  const cipher = new Cipher(loadOrCreateKey(config));
+  const key = loadOrCreateKey(config);
+  const cipher = new Cipher(key);
   const db = openDatabase(config.dataDir);
-  const repo = new Repo(db, cipher);
+  upgradeLegacyEncryption(db, cipher, log);
+  try {
+    checkSecretKey(db, key, cipher);
+  } catch (err) {
+    if (err instanceof WrongKeyError) {
+      log.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
   const stremio = new StremioClient({ baseUrl: config.stremioApiUrl, log });
-  const service = new ProfilesService({ repo, stremio, log, selfAddon: createSelfAddon(config) });
+  const accounts = new AccountsService({ db, cipher, stremio, log, selfAddon: createSelfAddon(config), access: config.access });
 
-  const open = repo.getOpenJournal();
-  if (open) log.warn('An earlier switch did not finish; resolve it on the web page', { journalId: open.id, kind: open.kind });
+  const open = db.prepare("SELECT COUNT(*) AS n FROM switch_journal WHERE status = 'open'").get().n;
+  if (open) log.warn('Some earlier switches did not finish; each account sees a recovery prompt on its page', { open });
+  log.info('Access rule', { mode: config.access.mode, accounts: accounts.accounts.count() });
 
-  const app = createApp({ config, db, service, log });
+  const scheduler = startScheduler({ db, dataDir: config.dataDir, accounts, log });
+
+  const app = createApp({ config, db, accounts, log });
   const server = app.listen(config.port, () => {
     log.info(`OpenProfiles listening on port ${config.port}`, { publicUrl: config.publicUrl, dataDir: config.dataDir });
   });
 
-  // Let a running switch finish before exiting; if it can't in time, the
+  // Let running switches finish before exiting; if one can't in time, its
   // journal records it and the web page offers recovery on next boot.
   let stopping = false;
   const shutdown = async (signal) => {
     if (stopping) return;
     stopping = true;
     log.info(`${signal} received, shutting down`);
+    scheduler.stop();
     server.close();
     const timeout = new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref());
-    await Promise.race([service.lock.idle(), timeout]);
+    const idle = Promise.all([...accounts.services.values()].map((s) => s.lock.idle()));
+    await Promise.race([idle, timeout]);
     db.close();
     process.exit(0);
   };

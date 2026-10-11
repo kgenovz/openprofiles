@@ -98,10 +98,10 @@ describe('add-on routes', () => {
 
   before(async () => {
     ctx = makeService({ fake: seededFake(), withAddon: true });
-    await ctx.service.linkAccount('kyle@example.com', 'hunter22');
+    await ctx.signIn();
     ctx.kids = await ctx.service.createProfile({ name: 'Kids', from: 'empty' });
-    const config = { publicUrl: PUBLIC_URL, adminPassword: 'x'.repeat(12), trustProxy: false };
-    server = createApp({ config, db: ctx.db, service: ctx.service, log: silentLogger }).listen(0);
+    const config = { publicUrl: PUBLIC_URL, trustProxy: false };
+    server = createApp({ config, db: ctx.db, accounts: ctx.accounts, log: silentLogger }).listen(0);
     await new Promise((resolve) => server.once('listening', resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   });
@@ -191,7 +191,8 @@ describe('add-on routes', () => {
   it('a slow switch answers "still switching" and finishes in the background', async () => {
     let finish;
     const slowService = { repo: ctx.repo, switchTo: () => new Promise((resolve) => { finish = resolve; }) };
-    const app = express().use(createAddonRouter({ config: { publicUrl: PUBLIC_URL }, service: slowService, log: silentLogger, waitMs: 20 }));
+    const slowAccounts = { byAddonToken: (t) => (t === token ? { account: {}, service: slowService } : null) };
+    const app = express().use(createAddonRouter({ config: { publicUrl: PUBLIC_URL }, accounts: slowAccounts, log: silentLogger, waitMs: 20 }));
     const slow = app.listen(0);
     await new Promise((resolve) => slow.once('listening', resolve));
     try {
