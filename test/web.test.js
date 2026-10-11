@@ -2,46 +2,10 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { silentLogger } from '../src/log.js';
 import { createApp } from '../src/web/app.js';
+import { Browser } from './helpers/browser.js';
 import { makeService, seededFake } from './helpers/setup.js';
 
-const EMAIL = 'kyle@example.com';
 const STREMIO_PASSWORD = 'hunter22';
-
-/** Minimal cookie-keeping client for the test server. */
-class Browser {
-  constructor(base) {
-    this.base = base;
-    this.cookie = '';
-  }
-
-  async request(path, { method = 'GET', form } = {}) {
-    const res = await fetch(this.base + path, {
-      method,
-      redirect: 'manual',
-      headers: {
-        ...(this.cookie ? { cookie: this.cookie } : {}),
-        ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
-      },
-      body: form ? new URLSearchParams(form).toString() : undefined,
-    });
-    const set = res.headers.get('set-cookie');
-    if (set) this.cookie = set.split(';')[0];
-    return { status: res.status, location: res.headers.get('location'), headers: res.headers, text: await res.text() };
-  }
-
-  async csrf() {
-    const page = await this.request('/configure');
-    return page.text.match(/name="_csrf" value="([^"]+)"/)[1];
-  }
-
-  async post(path, fields = {}) {
-    return this.request(path, { method: 'POST', form: { _csrf: await this.csrf(), ...fields } });
-  }
-
-  async signIn(password = STREMIO_PASSWORD) {
-    return this.request('/signin', { method: 'POST', form: { email: EMAIL, password } });
-  }
-}
 
 describe('web', () => {
   let server;
@@ -151,7 +115,7 @@ describe('web', () => {
     await phone.signIn();
     const desk = new Browser(base);
     await desk.signIn();
-    const page = (await desk.request('/configure')).text;
+    const page = (await desk.request('/account')).text;
     assert.match(page, /This device/);
     await desk.post('/account/sessions/others/signout');
     assert.equal((await phone.request('/configure')).status, 303, 'the other session is gone');

@@ -14,7 +14,7 @@ export const BACKUP_RETENTION = {
 
 const PROFILE_META = `id, name, avatar_preset, avatar_colour, library_count, addon_count, notif_count,
   snapshot_taken_at, stremio_user_id, created_at`;
-const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at, profile_id`;
+const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at, profile_id, edit_kind`;
 const ACTIVITY_KEEP = 200;
 
 /** Stable fingerprint of a snapshot's content, to tell whether anything changed since a backup. */
@@ -138,6 +138,12 @@ export class AccountRepo {
       WHERE id = @id AND account_id = @accountId`).run({ id, accountId: this.accountId, now: this.now(), ...enc });
   }
 
+  /** Replace only the saved add-on list; the library, notifications and "saved at" time stay. */
+  saveProfileAddons(id, addons) {
+    this.db.prepare('UPDATE profiles SET addons_enc = ?, addon_count = ? WHERE id = ? AND account_id = ?')
+      .run(this.cipher.encryptJson(addons, 'addons'), addons.length, id, this.accountId);
+  }
+
   renameProfile(id, name) {
     this.db.prepare('UPDATE profiles SET name = ? WHERE id = ? AND account_id = ?').run(name, id, this.accountId);
   }
@@ -194,16 +200,32 @@ export class AccountRepo {
 
   // ── backups ──────────────────────────────────────────────────────────────
 
-  /** `profileId`: for pre_change backups, the profile whose saved state this is (undo puts it back there). */
-  insertBackup({ kind, label, stremioUserId, snapshot, profileId = null }) {
+  /**
+   * `profileId`: for pre_change backups, the profile whose saved state this is (undo puts it back there).
+   * `editKind`: for pre_change backups, what the edit was ('addons' | 'cinemeta' | 'undo').
+   */
+  insertBackup({ kind, label, stremioUserId, snapshot, profileId = null, editKind = null }) {
     const enc = this.encodeSnapshot(snapshot);
     const info = this.db.prepare(`INSERT INTO backups
       (account_id, kind, label, library_enc, addons_enc, notifs_enc, library_count, addon_count, notif_count,
-       stremio_user_id, created_at, content_hash, profile_id)
+       stremio_user_id, created_at, content_hash, profile_id, edit_kind)
       VALUES (@accountId, @kind, @label, @library_enc, @addons_enc, @notifs_enc, @library_count, @addon_count,
-       @notif_count, @stremioUserId, @now, @contentHash, @profileId)`)
-      .run({ accountId: this.accountId, kind, label, stremioUserId, now: this.now(), contentHash: snapshotHash(snapshot), profileId, ...enc });
+       @notif_count, @stremioUserId, @now, @contentHash, @profileId, @editKind)`)
+      .run({ accountId: this.accountId, kind, label, stremioUserId, now: this.now(), contentHash: snapshotHash(snapshot), profileId, editKind, ...enc });
     return Number(info.lastInsertRowid);
+  }
+
+  /** The newest add-on or Cinemeta edit since `since` that hasn't been undone, if its profile still exists. */
+  latestUndoableEdit(since) {
+    return this.db.prepare(`SELECT b.id, b.label, b.created_at, b.edit_kind, b.profile_id, p.name AS profile_name
+      FROM backups b JOIN profiles p ON p.id = b.profile_id AND p.deleted_at IS NULL
+      WHERE b.account_id = ? AND b.kind = 'pre_change' AND b.edit_kind IN ('addons', 'cinemeta')
+        AND b.undone_at IS NULL AND b.created_at >= ?
+      ORDER BY b.created_at DESC, b.id DESC LIMIT 1`).get(this.accountId, since) || null;
+  }
+
+  markUndone(id) {
+    this.db.prepare('UPDATE backups SET undone_at = ? WHERE id = ? AND account_id = ?').run(this.now(), id, this.accountId);
   }
 
   /** Newest backup of a kind (metadata and hash only), or null. */

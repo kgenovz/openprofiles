@@ -63,5 +63,7 @@ export function loadConfig(env = process.env) {
     // Express "trust proxy": the default covers a reverse proxy on the same
     // host or Docker network (Caddy, Traefik, nginx).
     trustProxy: env.TRUST_PROXY ?? 'loopback, uniquelocal',
+    // Let the add-on manager fetch add-ons on private networks (a home server's LAN). Off by default.
+    allowPrivateAddons: /^(1|true|yes)$/i.test(env.ALLOW_PRIVATE_ADDONS || ''),
   };
 }

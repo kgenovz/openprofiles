@@ -1,17 +1,26 @@
 import { randomToken } from '../crypto.js';
 import { silentLogger } from '../log.js';
+import {
+  addonPool, addonRef, addonsHash, cinemetaOf, describeAddon, describeListChange, droppedProtected, listFromRefs,
+  runsOnDevice,
+} from './addons.js';
+import {
+  CINEMETA_ID, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
+  needsStock, sameSettings,
+} from './cinemeta.js';
 import { sealExport, openExport } from './exporter.js';
+import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
 import {
   GuardError, MAX_ADDONS, MAX_LIBRARY_ITEMS, checkAddons, checkLibrary, checkNotifs, decodeSnapshot,
 } from './guard.js';
 import { parseStremShareBackup, sameAccount, suggestedProfileName } from './importer.js';
 import {
-  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, hasId,
+  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, countContinueWatching, hasId,
 } from './library.js';
 import { Mutex } from './lock.js';
 import { snapshotHash } from './repo.js';
 import { isValidAvatar } from '../addon/avatars.js';
-import { ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
+import { ADDON_ID, ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
 
 // Each clears 3.5:1 under a white initial (see the poster artboard in the M2 design).
 export const AVATAR_COLOURS = ['#e5484d', '#e05d0c', '#b7790b', '#3b8f4b', '#0f8f80', '#0a7fe0', '#8e4ec6', '#d6409f'];
@@ -22,6 +31,16 @@ const IMPORT_STASH_MS = 15 * 60 * 1000;
 export const MAX_PROFILES = 20;
 export const BIN_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+export const UNDO_MS = DAY_MS;
+const ADDON_STASH_MS = 30 * 60 * 1000;
+const HEALTH_CONCURRENCY = 4;
+// Add-on fetches an account may make (by link, health checks) in a window: plenty for a person,
+// too few to use a shared server as a fetching proxy.
+const FETCH_BUDGET = 80;
+const FETCH_WINDOW_MS = 10 * 60 * 1000;
+
+export const NO_DETAILS_WARNING =
+  "Details pages are off and no other add-on in this profile provides them, so titles will open without descriptions or episode lists.";
 
 export const NATIVE_PROFILES_WARNING =
   'Your Stremio account has its own profiles (a Supporter feature). OpenProfiles would swap the library ' +
@@ -74,16 +93,33 @@ export function checkLiveSize(live) {
  * thin callers.
  */
 export class ProfilesService {
-  /** `selfAddon` (from addon/manifest.js) keeps OpenProfiles installed in every add-on list written. */
-  constructor({ repo, stremio, log = silentLogger, sleep = realSleep, now = () => Date.now(), selfAddon = null }) {
+  /**
+   * `selfAddon` (from addon/manifest.js) keeps OpenProfiles installed in every add-on list written.
+   * `fetchManifest(url)` fetches an add-on's manifest (through the fetch guard unless a test swaps it).
+   */
+  constructor({ repo, stremio, log = silentLogger, sleep = realSleep, now = () => Date.now(), selfAddon = null, fetchManifest = null }) {
     this.repo = repo;
     this.stremio = stremio;
     this.log = log;
     this.sleep = sleep;
     this.now = now;
     this.selfAddon = selfAddon;
+    this.fetchManifest = fetchManifest ?? ((url) => guardedFetchManifest(url));
     this.lock = new Mutex();
     this.importStash = new Map();
+    // Add-ons fetched by link, held so the page can refer to them by ref until saved.
+    this.addonStash = new Map();
+    this.fetchTimes = [];
+  }
+
+  /** Count `n` add-on fetches against the account's budget, or refuse. */
+  spendFetches(n) {
+    const now = this.now();
+    this.fetchTimes = this.fetchTimes.filter((t) => t > now - FETCH_WINDOW_MS);
+    if (this.fetchTimes.length + n > FETCH_BUDGET) {
+      throw new UserError('SLOW_DOWN', 'That is a lot of add-on checks in a short time. Wait a few minutes and try again.');
+    }
+    for (let i = 0; i < n; i++) this.fetchTimes.push(now);
   }
 
   prepareAddons(addons) {
@@ -172,35 +208,430 @@ export class ProfilesService {
 
   // ── profiles ─────────────────────────────────────────────────────────────
 
-  /** `from: 'current'` copies the account as it is now; `'empty'` keeps the add-ons only. */
-  createProfile({ name, from = 'empty', colour = DEFAULT_COLOUR }) {
+  /**
+   * A new profile. Nothing in Stremio changes unless `switchNow`.
+   *   from      'empty' (no library, the account's add-ons), 'current' (a copy of the account as it is
+   *             now) or 'profile' (a copy of `sourceProfileId`'s saved state)
+   *   addonRefs the add-ons it should have, in order (see addons.js); omitted keeps the starting list
+   *   addonUrl  one more add-on to fetch by link and add at the end
+   *   renames   catalog renames, `{ [ref]: { 'type:id': name } }`
+   *   cinemeta  Cinemeta settings (cinemeta.js) to apply to the list
+   * Returns the profile, plus `warnings` and (with `switchNow`) `switched`.
+   */
+  createProfile({
+    name, from = 'empty', colour = DEFAULT_COLOUR, picture = 'initial', sourceProfileId = null,
+    addonRefs = null, addonUrl = null, renames = {}, cinemeta = null, switchNow = false,
+  }) {
     return this.lock.run(async () => {
       const account = this.requireAccount();
       const clean = this.validateName(name);
       this.validateColour(colour);
+      if (!isValidAvatar(picture)) throw new UserError('BAD_INPUT', 'Pick one of the listed pictures.');
       this.assertNameFree(clean);
       this.assertRoomForProfile();
       this.assertNoOpenJournal();
       const { authKey } = await this.session();
+      const activeId = this.repo.getState()?.active_profile_id;
+      // The profile in use is newest in Stremio, so copying it means copying the account.
+      const start = from === 'profile' && sourceProfileId === activeId ? 'current' : from;
+
       let snapshot;
-      if (from === 'current') {
-        const live = await this.readLive(authKey);
+      let live = null;
+      if (start === 'current') {
+        live = await this.readLive(authKey);
         this.checkLiveSize(live);
         snapshot = this.capture(live);
-      } else if (from === 'empty') {
+      } else if (start === 'empty') {
         const addons = await this.stremio.getAddons(authKey);
+        this.noteAddons(addons);
         this.checkLiveSize({ library: [], addons });
+        live = { addons };
         snapshot = { library: [], addons, notifs: [] };
+      } else if (start === 'profile') {
+        const source = this.repo.getProfileRow(Number(sourceProfileId));
+        if (!source) throw new UserError('NOT_FOUND', 'The profile to copy no longer exists.');
+        this.assertAnchor(source, account, source.name);
+        snapshot = { ...decodeSnapshot(this.repo.cipher, source, source.name) };
       } else {
         throw new UserError('BAD_INPUT', 'Unknown profile type.');
       }
-      if (snapshot.addons.length === 0) {
-        throw new UserError('NO_ADDONS', 'The account has no add-ons installed, so a new profile would have none. Install Cinemeta first.');
+
+      const warnings = [];
+      if (addonRefs || addonUrl) {
+        const liveAddons = live?.addons ?? await this.stremio.getAddons(authKey);
+        const pool = addonPool([{ addons: snapshot.addons }, { addons: liveAddons }, ...this.savedAddonLists()]);
+        const lookup = (ref) => pool.get(ref)?.addon ?? this.stashedAddon(ref);
+        const { addons, missing } = listFromRefs(addonRefs ?? snapshot.addons.map(addonRef), lookup, renames);
+        if (missing.length) throw new UserError('ADDON_GONE', "An add-on you picked isn't available any more. Go back to the add-ons step and pick again.");
+        if (addonUrl) {
+          const extra = await this.fetchAddon(addonUrl);
+          if (!addons.some((a) => addonRef(a) === addonRef(extra))) addons.push(extra);
+        }
+        this.assertKeepsProtected(snapshot.addons, addons);
+        snapshot.addons = addons;
       }
-      const id = this.repo.insertProfile({ name: clean, avatarPreset: 'initial', avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot });
+      if (cinemeta) snapshot.addons = await this.applyCinemeta(snapshot.addons, cinemeta, warnings);
+      if (snapshot.addons.length === 0) {
+        throw new UserError('NO_ADDONS', 'A profile needs at least one add-on. Keep Cinemeta, or install it first.');
+      }
+      checkAddons(snapshot.addons, clean);
+
+      const id = this.repo.insertProfile({ name: clean, avatarPreset: picture, avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot });
       this.repo.logActivity('profile', `Created "${clean}"`);
-      return this.repo.getProfile(id);
+      let switched = null;
+      if (switchNow) {
+        try {
+          switched = await this.doSwitch(id);
+          warnings.push(...switched.warnings);
+        } catch (err) {
+          warnings.push(`"${clean}" was created, but switching to it didn't work: ${userMessageOf(err)}`);
+        }
+      }
+      return Object.assign(this.repo.getProfile(id), { warnings, switched });
     });
+  }
+
+  /**
+   * Everything the new-profile wizard offers: every add-on any profile has
+   * (the profile in use as Stremio has it now), and for each way to start,
+   * which of them are ticked and how Cinemeta is set.
+   */
+  async wizardOptions() {
+    this.requireAccount();
+    const { authKey } = await this.session();
+    const live = await this.stremio.getAddons(authKey);
+    this.noteAddons(live);
+    const activeId = this.repo.getState()?.active_profile_id;
+    const active = activeId != null ? this.repo.getProfile(activeId) : null;
+    const saved = this.savedAddonLists({ skip: activeId });
+    const pool = addonPool([{ label: active?.name ?? 'Stremio now', addons: live }, ...saved]);
+    const startOf = (addons) => ({ refs: addons.map(addonRef), cinemeta: cinemetaOf(addons) });
+    return {
+      activeName: active?.name ?? null,
+      room: this.repo.countProfiles() < MAX_PROFILES,
+      pool: [...pool.values()].map(({ addon, from }) => ({ ...describeAddon(addon), from })),
+      starts: {
+        live: startOf(live),
+        profiles: saved.map(({ id, label, addons }) => ({ id, name: label, ...startOf(addons) })),
+      },
+    };
+  }
+
+  /** Every readable profile's saved add-on list, `{ id, label, addons }`. */
+  savedAddonLists({ skip = null } = {}) {
+    const out = [];
+    for (const p of this.repo.listProfiles()) {
+      if (p.id === skip) continue;
+      try {
+        out.push({ id: p.id, label: p.name, addons: this.savedSnapshot(p.id).addons });
+      } catch (err) {
+        if (!(err instanceof GuardError)) throw err;
+      }
+    }
+    return out;
+  }
+
+  /** A profile's saved library, add-ons and notifications, checked. */
+  savedSnapshot(profileId) {
+    const row = this.repo.getProfileRow(profileId);
+    if (!row) throw new UserError('NOT_FOUND', 'That profile no longer exists.');
+    return decodeSnapshot(this.repo.cipher, row, row.name);
+  }
+
+  /** What the profile page shows about one profile. Unreadable saved state shows as null. */
+  profileDetails(profileId) {
+    const profile = this.requireProfile(profileId);
+    let saved = null;
+    try {
+      saved = this.savedSnapshot(profileId);
+    } catch (err) {
+      if (!(err instanceof GuardError)) throw err;
+    }
+    return {
+      profile,
+      active: this.repo.getState()?.active_profile_id === profileId,
+      addons: saved ? saved.addons.map(describeAddon) : null,
+      cinemeta: saved ? cinemetaOf(saved.addons) : null,
+      continueWatching: saved ? countContinueWatching(saved.library) : null,
+    };
+  }
+
+  // ── add-on manager and Cinemeta control ──────────────────────────────────
+
+  /**
+   * The add-on list an edit starts from: Stremio's own for the profile in
+   * use (it's the newest), the saved copy for any other. `base` fingerprints
+   * it, so a save can tell if it changed meanwhile.
+   */
+  async editableAddons(profileId) {
+    const profile = this.requireProfile(profileId);
+    const active = this.repo.getState()?.active_profile_id === profileId;
+    let addons;
+    if (active) {
+      const { authKey } = await this.session();
+      addons = await this.stremio.getAddons(authKey);
+      this.noteAddons(addons);
+    } else {
+      addons = this.savedSnapshot(profileId).addons;
+    }
+    return { profile, active, addons, base: addonsHash(addons) };
+  }
+
+  /** Everything the add-on manager page shows. */
+  async addonManager(profileId) {
+    const { profile, active, addons, base } = await this.editableAddons(profileId);
+    const own = new Set(addons.map(addonRef));
+    const others = addonPool(this.savedAddonLists({ skip: profileId }));
+    const { index, wrapped } = findCinemeta(addons);
+    return {
+      profile,
+      active,
+      base,
+      addons: addons.map(describeAddon),
+      pool: [...others.values()].filter(({ addon }) => !own.has(addonRef(addon)) && !isSelfAddon(addon))
+        .map(({ addon, from }) => ({ ...describeAddon(addon), from })),
+      cinemeta: {
+        present: index !== -1,
+        wrapped,
+        settings: index === -1 ? null : deriveSettings(addons[index].manifest),
+        otherMeta: anotherAddonServesMeta(addons, index),
+      },
+    };
+  }
+
+  /**
+   * Save a profile's add-on list: `refs` in order (current add-ons, ones from
+   * other profiles, or ones fetched by link), plus catalog renames. `addRef`
+   * and `addUrl` append one more (the form's fallbacks without JavaScript).
+   */
+  saveAddons(profileId, { base, refs = [], renames = {}, addRef = null, addUrl = null }) {
+    return this.editAddons(profileId, {
+      base,
+      editKind: 'addons',
+      label: (p) => `Before editing ${p.name}'s add-ons`,
+      change: async (current, profile) => {
+        const others = addonPool(this.savedAddonLists({ skip: profileId }));
+        const lookup = (ref) => current.find((a) => addonRef(a) === ref) ?? others.get(ref)?.addon ?? this.stashedAddon(ref);
+        const { addons, missing } = listFromRefs(addRef ? [...refs, addRef] : refs, lookup, renames);
+        if (missing.length) throw new UserError('ADDON_GONE', "An add-on in the list isn't available any more. Reload the page and try again.");
+        if (addUrl) {
+          const extra = await this.fetchAddon(addUrl);
+          if (!addons.some((a) => addonRef(a) === addonRef(extra))) addons.push(extra);
+        }
+        this.assertKeepsProtected(current, addons);
+        return { addons, activity: `Edited ${profile.name}'s add-ons: ${describeListChange(current, addons) || 'no change'}` };
+      },
+    });
+  }
+
+  /** Change how Cinemeta behaves in one profile (settings from cinemeta.js). */
+  saveCinemeta(profileId, settings, { base }) {
+    return this.editAddons(profileId, {
+      base,
+      editKind: 'cinemeta',
+      label: (p) => `Before changing ${p.name}'s Cinemeta`,
+      change: async (current, profile) => {
+        const { index } = findCinemeta(current);
+        if (index === -1) throw new UserError('NO_CINEMETA', `${profile.name} doesn't have Cinemeta, so there's nothing to change.`);
+        const warnings = [];
+        const addons = await this.applyCinemeta(current, settings, warnings);
+        const what = describeChanges(deriveSettings(current[index].manifest), settings);
+        return { addons, warnings, activity: `Changed ${profile.name}'s Cinemeta: ${what.join(', ') || 'no change'}` };
+      },
+    });
+  }
+
+  /** Put Cinemeta back exactly as Stremio ships it. Refuses if the stock copy can't be fetched. */
+  resetCinemeta(profileId, { base }) {
+    return this.editAddons(profileId, {
+      base,
+      editKind: 'cinemeta',
+      label: (p) => `Before resetting ${p.name}'s Cinemeta`,
+      change: async (current, profile) => {
+        const { index } = findCinemeta(current);
+        if (index === -1) throw new UserError('NO_CINEMETA', `${profile.name} doesn't have Cinemeta, so there's nothing to reset.`);
+        const stock = await this.fetchStockCinemeta(current[index]);
+        const addons = current.slice();
+        addons[index] = { ...current[index], manifest: stock };
+        return { addons, activity: `Reset ${profile.name}'s Cinemeta to Stremio's default` };
+      },
+    });
+  }
+
+  /** Apply Cinemeta settings to a list, fetching the stock copy only if rows must come back. */
+  async applyCinemeta(addons, settings, warnings) {
+    const { index } = findCinemeta(addons);
+    if (index === -1) return addons;
+    const current = addons[index].manifest;
+    const next = { ...STOCK_SETTINGS, ...settings };
+    if (sameSettings(deriveSettings(current), next)) return addons;
+    const stock = needsStock(current, next) ? await this.fetchStockCinemeta(addons[index]) : null;
+    const out = addons.slice();
+    out[index] = { ...addons[index], manifest: buildManifest({ current, stock, settings: next }) };
+    if (next.removeMeta && !anotherAddonServesMeta(out, index)) warnings.push(NO_DETAILS_WARNING);
+    return out;
+  }
+
+  async fetchStockCinemeta(addon) {
+    let stock;
+    try {
+      stock = checkManifest(await this.fetchManifest(addon.transportUrl));
+    } catch (err) {
+      this.log.warn('Stock Cinemeta fetch failed', { error: err.message });
+      throw new UserError('CINEMETA_UNREACHABLE', "Couldn't reach Cinemeta to bring those rows back, so nothing was changed. Try again in a minute.");
+    }
+    if (stock.id !== CINEMETA_ID) throw new UserError('CINEMETA_UNREACHABLE', "Cinemeta's link didn't return Cinemeta, so nothing was changed.");
+    return stock;
+  }
+
+  /**
+   * The one way an edit reaches a profile's add-ons. For the profile in use
+   * it writes Stremio (after a backup of the whole account); for any other it
+   * changes only the saved copy (after a backup of it). `change(current,
+   * profile)` returns `{ addons, activity, warnings? }`.
+   */
+  editAddons(profileId, opts) {
+    return this.lock.run(() => this.doEditAddons(profileId, opts));
+  }
+
+  async doEditAddons(profileId, { base, editKind, label, change }) {
+    const account = this.requireAccount();
+    this.assertNoOpenJournal();
+    const profile = this.requireProfile(profileId);
+    const active = this.repo.getState()?.active_profile_id === profileId;
+    let authKey = null;
+    let live = null;
+    let current;
+    if (active) {
+      ({ authKey } = await this.session());
+      live = await this.readLive(authKey);
+      this.checkLiveSize(live);
+      current = live.addons;
+    } else {
+      current = this.savedSnapshot(profileId).addons;
+    }
+    if (base != null && addonsHash(current) !== base) {
+      throw new UserError('CHANGED', `${profile.name}'s add-ons changed since this page was opened${active ? ' (in Stremio)' : ''}. Nothing was saved: reload the page and make the change again.`);
+    }
+
+    const { addons: wanted, activity, warnings = [] } = await change(current, profile);
+    const next = this.prepareAddons(wanted);
+    checkAddons(next, profile.name);
+    if (JSON.stringify(next) === JSON.stringify(current)) return { changed: false, warnings: [], active, profile };
+
+    const backupId = active
+      ? this.repo.insertBackup({ kind: 'pre_change', label: label(profile), stremioUserId: account.stremio_user_id, snapshot: this.capture(live), profileId, editKind })
+      : this.backupProfileBeforeChange(profileId, label(profile), editKind);
+    if (active) {
+      try {
+        await this.stremio.setAddons(authKey, next);
+      } catch (err) {
+        this.repo.deleteBackup(backupId);
+        throw new UserError('WRITE_FAILED', `Stremio didn't take the new add-on list, so nothing changed: ${userMessageOf(err)}`, { cause: err });
+      }
+      this.noteAddons(next);
+    }
+    this.repo.saveProfileAddons(profileId, next);
+    this.repo.pruneBackups();
+    this.repo.logActivity('edit', activity);
+    this.log.info('Add-ons edited', { profileId, editKind, live: active });
+    return { changed: true, backupId, warnings, active, profile };
+  }
+
+  /** The newest add-on or Cinemeta edit of the last 24 hours that can still be undone, or null. */
+  latestUndo() {
+    return this.repo.latestUndoableEdit(this.now() - UNDO_MS);
+  }
+
+  /**
+   * Undo an add-on or Cinemeta edit: put back the add-on list from the
+   * backup taken before it. Only add-ons change; the library and progress
+   * since then stay.
+   */
+  undoEdit(backupId) {
+    return this.lock.run(async () => {
+      const account = this.requireAccount();
+      const row = this.repo.getBackupRow(backupId);
+      if (!row || row.kind !== 'pre_change' || !['addons', 'cinemeta'].includes(row.edit_kind) || row.undone_at != null) {
+        throw new UserError('NOT_FOUND', "That edit can't be undone any more.");
+      }
+      if (row.profile_id == null || !this.repo.getProfile(row.profile_id)) {
+        throw new UserError('NOT_FOUND', 'The profile that edit was made to no longer exists.');
+      }
+      this.assertAnchor(row, account, 'The backup taken before that edit');
+      const { addons } = decodeSnapshot(this.repo.cipher, row, 'The backup taken before that edit');
+      const result = await this.doEditAddons(row.profile_id, {
+        base: null,
+        editKind: 'undo',
+        label: (p) => `Before undoing an edit of ${p.name}'s add-ons`,
+        change: async (current, profile) => ({ addons, activity: `Undid an edit of ${profile.name}'s add-ons` }),
+      });
+      this.repo.markUndone(backupId);
+      return result;
+    });
+  }
+
+  /** Can each add-on of the list be reached? `{ [ref]: 'ok' | 'unreachable' | 'device' }`. */
+  async checkAddonHealth(profileId) {
+    const { addons } = await this.editableAddons(profileId);
+    this.spendFetches(addons.filter((a) => !isSelfAddon(a) && !runsOnDevice(a)).length);
+    const results = {};
+    const queue = [...addons];
+    const worker = async () => {
+      for (let a = queue.shift(); a; a = queue.shift()) {
+        const ref = addonRef(a);
+        if (isSelfAddon(a)) results[ref] = 'ok';
+        else if (runsOnDevice(a)) results[ref] = 'device';
+        else {
+          try {
+            await this.fetchManifest(a.transportUrl);
+            results[ref] = 'ok';
+          } catch {
+            results[ref] = 'unreachable';
+          }
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: HEALTH_CONCURRENCY }, worker));
+    return results;
+  }
+
+  /** Fetch an add-on by its link for a page to add (held for 30 minutes by ref). */
+  async lookupAddon(raw) {
+    return describeAddon(await this.fetchAddon(raw));
+  }
+
+  async fetchAddon(raw) {
+    let url;
+    let manifest;
+    try {
+      url = normaliseAddonUrl(raw);
+      this.spendFetches(1);
+      manifest = checkManifest(await this.fetchManifest(url));
+    } catch (err) {
+      if (err instanceof FetchError) throw new UserError('ADDON_FETCH', err.message);
+      throw err;
+    }
+    if (manifest.id === ADDON_ID) throw new UserError('ADDON_FETCH', 'That is OpenProfiles itself. Every profile has it already.');
+    const addon = { transportUrl: url, transportName: '', manifest, flags: {} };
+    const now = this.now();
+    for (const [key, entry] of this.addonStash) if (entry.expiresAt <= now) this.addonStash.delete(key);
+    while (this.addonStash.size >= 30) this.addonStash.delete(this.addonStash.keys().next().value);
+    this.addonStash.set(addonRef(addon), { addon, expiresAt: now + ADDON_STASH_MS });
+    return addon;
+  }
+
+  stashedAddon(ref) {
+    const entry = this.addonStash.get(ref);
+    return entry && entry.expiresAt > this.now() ? entry.addon : undefined;
+  }
+
+  assertKeepsProtected(before, after) {
+    const dropped = droppedProtected(before, after);
+    if (dropped.length) {
+      const names = dropped.map((a) => a.manifest?.name || a.manifest?.id).join(' and ');
+      throw new UserError('PROTECTED', `${names} can't be removed (you can still move ${dropped.length === 1 ? 'it' : 'them'}).`);
+    }
   }
 
   renameProfile(id, name) {
@@ -487,12 +918,12 @@ export class ProfilesService {
    * (add-ons, Cinemeta, imports). Restoring that backup is the edit's undo.
    * Call inside the operation's lock.
    */
-  backupProfileBeforeChange(profileId, label) {
+  backupProfileBeforeChange(profileId, label, editKind = null) {
     const account = this.requireAccount();
     const row = this.repo.getProfileRow(profileId);
     if (!row) throw new UserError('NOT_FOUND', 'That profile no longer exists.');
     const snapshot = decodeSnapshot(this.repo.cipher, row, row.name);
-    const id = this.repo.insertBackup({ kind: 'pre_change', label, stremioUserId: account.stremio_user_id, snapshot, profileId });
+    const id = this.repo.insertBackup({ kind: 'pre_change', label, stremioUserId: account.stremio_user_id, snapshot, profileId, editKind });
     this.repo.pruneBackups();
     return id;
   }

@@ -35,6 +35,11 @@ export function countActive(items) {
   return items.reduce((n, it) => n + (isActive(it) ? 1 : 0), 0);
 }
 
+/** Titles Stremio shows in Continue Watching (stremio-core: `(!removed || temp) && time_offset > 0`). */
+export function countContinueWatching(items) {
+  return items.reduce((n, it) => n + (hasId(it) && (it.removed !== true || it.temp === true) && it.state?.timeOffset > 0 ? 1 : 0), 0);
+}
+
 /**
  * A tombstone with nothing left in it: removed, not temp, no progress and no
  * watched episodes. Only these are safe to treat as "nothing here".

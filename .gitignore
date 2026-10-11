@@ -5,6 +5,6 @@ data/
 *.db-shm
 secret.key
 .env
-data-dev/
+data-dev*/
 art-preview/
 data-backups/

@@ -226,6 +226,13 @@ const MIGRATIONS = [
     value TEXT NOT NULL
   );
   `,
+  // M6: edits and their undo.
+  //   backups.edit_kind  for pre_change backups: 'addons' | 'cinemeta' (offered as Undo for 24 h) | 'undo'
+  //   backups.undone_at  set once that edit has been undone
+  `
+  ALTER TABLE backups ADD COLUMN edit_kind TEXT;
+  ALTER TABLE backups ADD COLUMN undone_at INTEGER;
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

@@ -316,6 +316,26 @@ day, checked hourly and two minutes after boot.
 
 ### M6: easy to set up and use
 
+*Built 2026-10-11* (migration 5: `backups.edit_kind`, `backups.undone_at`). Notes from building it:
+
+- Pages are tabs with their own URLs: `/configure` (Profiles), `/profiles/:id` (the row plus that
+  profile's editor), `/profiles/new` (the wizard, one form; app.js shows a step at a time and it
+  still works without JavaScript), `/profiles/:id/addons` (manager + Cinemeta side by side),
+  `/backups`, `/install`, `/account`. The first-run checklist on Profiles stays until a second
+  profile exists and the add-on is installed.
+- Pages name add-ons by `ref` (a hash of the link), never the link: links carry debrid keys.
+  Add-by-link fetches through `core/fetchGuard.js` (checks the address actually connected to, so
+  DNS can't swap in a private one; redirects re-checked), and the server holds the result 30 min
+  by ref. Add-on tiles are coloured initials: the page doesn't load other sites' logos.
+- Every edit goes through `ProfilesService.doEditAddons`: the profile in use edits Stremio's live
+  list (backup of the whole account first, `base` fingerprint refuses a stale page); any other
+  profile edits its saved copy only. Undo (24 h, newest edit first, chainable) puts back only the
+  add-on list, never the library, so nothing watched since is lost.
+- Cinemeta's "New" (`year`) has a required genre, so it's a Discover catalog, not a Home row; the
+  switches say so. Catalogs Stremio never shows (required extras other than genre, e.g. the
+  calendar ones) aren't offered for renaming.
+- `ALLOW_PRIVATE_ADDONS=true` opts a home server out of the private-address check.
+
 - **First run:** sign in, see your account become "Original", then the wizard offers your
   first new profile; the install card is part of the flow, not buried.
 - **New-profile wizard:** 1 Name + picture + colour → 2 Start from (empty, copy of the account

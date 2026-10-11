@@ -167,3 +167,38 @@ export function notif(id, extra = {}) {
 export function addon(id, transportUrl = `https://${id}.example/manifest.json`) {
   return { transportUrl, transportName: '', manifest: { id, name: id, version: '1.0.0', resources: [], types: [], catalogs: [] }, flags: {} };
 }
+
+export const CINEMETA_URL = 'https://v3-cinemeta.strem.io/manifest.json';
+
+/** Close to the real stock Cinemeta manifest: Popular/New/Featured per type, plus the two calendar catalogs. */
+export function cinemetaManifest() {
+  const rows = (type) => [
+    { type, id: 'top', name: 'Popular', extra: [{ name: 'genre', options: ['Action'] }, { name: 'search' }, { name: 'skip' }] },
+    { type, id: 'year', name: 'New', extra: [{ name: 'genre', options: ['2026'], isRequired: true }, { name: 'skip' }] },
+    { type, id: 'imdbRating', name: 'Featured', extra: [{ name: 'genre', options: ['Action'] }, { name: 'skip' }] },
+  ];
+  return {
+    id: 'com.linvo.cinemeta',
+    version: '3.0.13',
+    name: 'Cinemeta',
+    description: 'The official add-on for movie and series catalogs',
+    resources: ['catalog', 'meta', 'addon_catalog'],
+    types: ['movie', 'series'],
+    idPrefixes: ['tt'],
+    catalogs: [
+      ...rows('movie'),
+      ...rows('series'),
+      { type: 'series', id: 'last-videos', name: 'Last videos', extra: [{ name: 'lastVideosIds', isRequired: true }] },
+      { type: 'series', id: 'calendar-videos', name: 'Calendar videos', extra: [{ name: 'calendarVideosIds', isRequired: true }] },
+    ],
+  };
+}
+
+export function cinemetaAddon() {
+  return { transportUrl: CINEMETA_URL, transportName: '', manifest: cinemetaManifest(), flags: { official: true, protected: true } };
+}
+
+/** An add-on with a manifest that does something (catalogs, or metadata). */
+export function richAddon(id, { url = `https://${id}.example/manifest.json`, resources = ['catalog', 'stream'], types = ['movie', 'series'], catalogs = [{ type: 'movie', id: `${id}-top`, name: `${id} picks` }] } = {}) {
+  return { transportUrl: url, transportName: '', manifest: { id: `org.${id}`, name: id, version: '1.0.0', resources, types, catalogs }, flags: {} };
+}

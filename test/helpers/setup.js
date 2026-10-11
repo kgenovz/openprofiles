@@ -3,12 +3,30 @@ import { createSelfAddon } from '../../src/addon/manifest.js';
 import { Cipher } from '../../src/crypto.js';
 import { openDatabase } from '../../src/db.js';
 import { AccountsService } from '../../src/core/accounts.js';
+import { FetchError } from '../../src/core/fetchGuard.js';
 import { StremioClient } from '../../src/stremio/client.js';
-import { FakeStremio, addon, libItem, notif } from './fakeStremio.js';
+import { CINEMETA_URL, FakeStremio, addon, cinemetaManifest, libItem, notif } from './fakeStremio.js';
 
 export const noSleep = async () => {};
 
 export const PUBLIC_URL = 'https://profiles.example.com';
+
+/**
+ * Stands in for fetching add-on manifests over the internet: `manifests`
+ * maps link → manifest (stock Cinemeta is there by default). Unknown links fail
+ * like an unreachable add-on. `fetched` records each link asked for.
+ */
+export function fakeManifests() {
+  const manifests = new Map([[CINEMETA_URL, cinemetaManifest()]]);
+  const fetched = [];
+  const fetchManifest = async (url) => {
+    fetched.push(url);
+    const m = manifests.get(url);
+    if (!m) throw new FetchError('UNREACHABLE', "Couldn't reach that add-on.");
+    return structuredClone(m);
+  };
+  return { manifests, fetched, fetchManifest };
+}
 
 /**
  * An AccountsService on an in-memory database and a fake Stremio.
@@ -16,16 +34,17 @@ export const PUBLIC_URL = 'https://profiles.example.com';
  * and points `ctx.service` / `ctx.repo` at that account.
  * `withAddon` turns on the M2 self-insert. `access` is the sign-in rule.
  */
-export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32), withAddon = false, access = { mode: 'owner' } } = {}) {
+export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32), withAddon = false, access = { mode: 'owner' }, web = fakeManifests() } = {}) {
   const db = openDatabase(null, { filename: ':memory:' });
   const cipher = new Cipher(key);
   let clock = Date.parse('2026-10-10T12:00:00.000Z');
   const now = () => (clock += 1000);
   const stremio = new StremioClient({ fetchImpl: fake.fetch, sleep: noSleep });
   const selfAddon = withAddon ? createSelfAddon({ publicUrl: PUBLIC_URL }) : null;
-  const accounts = new AccountsService({ db, cipher, stremio, sleep: noSleep, now, selfAddon, access });
+  const accounts = new AccountsService({ db, cipher, stremio, sleep: noSleep, now, selfAddon, access, fetchManifest: web.fetchManifest });
   const ctx = {
-    fake, db, cipher, stremio, accounts, service: null, repo: null,
+    fake, db, cipher, stremio, accounts, web, service: null, repo: null,
+    advance(ms) { clock += ms; },
     async signIn(email = fake.user.email, password = fake.password) {
       const result = await accounts.signIn(email, password);
       ctx.service = accounts.forAccount(result.accountId);

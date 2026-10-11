@@ -2,7 +2,7 @@
 // account. Run it, then start OpenProfiles with STREMIO_API_URL=http://localhost:7001.
 // Sign in with kyle@example.com / hunter22.
 import http from 'node:http';
-import { FakeStremio, addon, libItem, notif } from '../test/helpers/fakeStremio.js';
+import { FakeStremio, cinemetaAddon, libItem, notif, richAddon } from '../test/helpers/fakeStremio.js';
 
 const port = Number(process.env.FAKE_STREMIO_PORT || 7001);
 const fake = new FakeStremio().seed({
@@ -12,7 +12,12 @@ const fake = new FakeStremio().seed({
     libItem('tt2861424', { name: 'Rick and Morty', lastWatched: '2026-08-01T20:00:00.000Z' }),
   ],
   notifs: [notif('tt2861424 8 1')],
-  addons: [addon('com.linvo.cinemeta'), addon('org.stremio.opensubtitles'), addon('debrid.example', 'https://debrid.example/KEY/manifest.json')],
+  addons: [
+    cinemetaAddon(),
+    richAddon('TMDB', { url: 'https://tmdb.example/manifest.json', resources: ['catalog', 'meta'] }),
+    richAddon('Torrentio', { url: 'https://debrid.example/KEY/manifest.json', resources: ['stream'], catalogs: [] }),
+    richAddon('OpenSubtitles v3', { url: 'https://opensubtitles.example/manifest.json', resources: ['subtitles'], catalogs: [] }),
+  ],
 });
 
 http.createServer(async (req, res) => {

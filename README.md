@@ -21,6 +21,7 @@ each profile. When you switch, it:
 Things to know:
 
 - **Switching changes every device signed in to the account.** Everyone sees the same profile.
+- **Each profile has its own add-ons**, and its own Cinemeta catalogs (see below).
 - **Refreshing after a switch:** in the Switch profile row, tap the profile's first stream
   ("Tap here to refresh Stremio"). Stremio reloads and lands on Home on desktop (after a quick
   hop through the browser), or on your Library on Android (then go back Home). After switching
@@ -57,6 +58,7 @@ https.
    | `SECRET_KEY` | no | 32-byte key (64 hex chars) instead of the generated `/data/secret.key` |
    | `PORT` | no | Port inside the container (default `7000`) |
    | `TRUST_PROXY` | no | Express trust-proxy setting (default trusts local and private networks) |
+   | `ALLOW_PRIVATE_ADDONS` | no | `true` lets the add-on manager fetch add-ons on private networks (a home LAN). Off by default |
 
 2. Put it behind a reverse proxy that handles https. With [Caddy](https://caddyserver.com):
 
@@ -72,8 +74,10 @@ https.
    sign-in key and is never stored. The first time, your account as it is now becomes the
    **Original** profile, and a permanent backup of it is kept. With the default `ACCESS=owner`,
    do this right away: the first account to sign in owns the server.
-5. Create profiles: an empty one (same add-ons, empty library) or a copy of the account.
-6. Under **Switch from inside Stremio**, choose **Install in Stremio**.
+5. **New profile** opens a short wizard: name, picture and colour; what it starts with (an empty
+   library, a copy of the account, or a copy of another profile); which add-ons it has and in what
+   order; and which Cinemeta catalogs it shows. Nothing in Stremio changes until you switch to it.
+6. On the **Install in Stremio** tab, choose **Install in Stremio**.
 
 One server can hold several Stremio accounts (`ACCESS=list` or `open`). Each account only ever
 sees and changes its own profiles, backups and Stremio account.
@@ -102,6 +106,34 @@ saved profiles and backups can't be read. Back up the whole volume.
   **A switch didn't finish** with two choices: finish switching, or go back to how things were.
   Nothing else can change until you pick one.
 
+## Add-ons and Cinemeta, per profile
+
+Each profile has its own add-on list. Open a profile's **Edit**, then **Manage add-ons**, to:
+
+- reorder (drag, or the arrows: top to bottom is the order Stremio uses), remove, and rename
+  catalogs,
+- add an add-on by its link, or one another profile has,
+- check that each add-on still answers.
+
+Cinemeta and Local Files are Stremio's protected add-ons: they can be moved but not removed.
+OpenProfiles itself stays in every list, so the Switch profile row never disappears.
+
+**Cinemeta** (Stremio's built-in catalogs) can be trimmed per profile: hide Popular, New or
+Featured, turn its search off, or turn off its details pages (only sensible when another add-on,
+like TMDB, provides them; the page warns otherwise). This edits the copy of Cinemeta stored in
+that profile's add-on list, the same way Stremio stores it. Bringing a hidden catalog back
+fetches Cinemeta again; if Cinemeta can't be reached, nothing changes. **Reset to Stremio's
+default** puts the stock Cinemeta back.
+
+Editing the profile in use changes Stremio right away; editing any other profile changes only
+its saved copy, which Stremio gets when you switch to it. Either way a backup is taken first,
+and the page offers **Undo** for 24 hours. Undo puts back only the add-ons: anything watched
+since stays.
+
+Add-on links are fetched by the server, so they are checked first: only `http(s)`, no private
+or local addresses (unless `ALLOW_PRIVATE_ADDONS`), at most 512 KB, 5 seconds. The page never
+shows the links themselves, since they often contain debrid keys.
+
 ## Import from StremShare
 
 In StremShare, open **Tools › Backup & restore** and download a backup. In OpenProfiles, choose
@@ -124,7 +156,7 @@ are public domain (CC0): Lorelei, Notionists, Open Peeps, Pixel Art and Thumbs.
   (and updates the copy installed in Stremio).
 - The settings page uses a session cookie (`HttpOnly`, `SameSite=Strict`), CSRF tokens on every
   form, and a login rate limit.
-- One server serves one Stremio account.
+- Each Stremio account on a server only ever sees and changes its own profiles and backups.
 
 ## Development
 

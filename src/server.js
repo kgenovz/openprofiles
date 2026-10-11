@@ -4,6 +4,7 @@ import { ConfigError, loadConfig } from './config.js';
 import { Cipher, loadOrCreateKey } from './crypto.js';
 import { openDatabase } from './db.js';
 import { AccountsService } from './core/accounts.js';
+import { fetchManifest } from './core/fetchGuard.js';
 import { WrongKeyError, checkSecretKey } from './core/keycheck.js';
 import { upgradeLegacyEncryption } from './core/rekey.js';
 import { startScheduler } from './core/scheduler.js';
@@ -44,7 +45,9 @@ function main() {
     throw err;
   }
   const stremio = new StremioClient({ baseUrl: config.stremioApiUrl, log });
-  const accounts = new AccountsService({ db, cipher, stremio, log, selfAddon: createSelfAddon(config), access: config.access });
+  const accounts = new AccountsService({ db, cipher, stremio, log, selfAddon: createSelfAddon(config), access: config.access,
+    fetchManifest: (url) => fetchManifest(url, { allowPrivate: config.allowPrivateAddons }),
+  });
 
   const open = db.prepare("SELECT COUNT(*) AS n FROM switch_journal WHERE status = 'open'").get().n;
   if (open) log.warn('Some earlier switches did not finish; each account sees a recovery prompt on its page', { open });

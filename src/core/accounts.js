@@ -33,7 +33,7 @@ export function accessDecision({ mode, allowed = [], maxAccounts = Infinity }, {
  * own ProfilesService, so each has its own lock and only sees its own rows.
  */
 export class AccountsService {
-  constructor({ db, cipher, stremio, log = silentLogger, sleep, now = () => Date.now(), selfAddon = null, access = { mode: 'owner' } }) {
+  constructor({ db, cipher, stremio, log = silentLogger, sleep, now = () => Date.now(), selfAddon = null, access = { mode: 'owner' }, fetchManifest = null }) {
     this.db = db;
     this.cipher = cipher;
     this.stremio = stremio;
@@ -42,6 +42,7 @@ export class AccountsService {
     this.now = now;
     this.selfAddon = selfAddon;
     this.access = access;
+    this.fetchManifest = fetchManifest;
     this.accounts = new Accounts(db, cipher, now);
     this.services = new Map();
     // Serialises account creation, so two first sign-ins can't both claim an `owner` server.
@@ -52,7 +53,7 @@ export class AccountsService {
     let service = this.services.get(accountId);
     if (!service) {
       const repo = new AccountRepo(this.db, this.cipher, accountId, this.now);
-      service = new ProfilesService({ repo, stremio: this.stremio, log: this.log, sleep: this.sleep, now: this.now, selfAddon: this.selfAddon });
+      service = new ProfilesService({ repo, stremio: this.stremio, log: this.log, sleep: this.sleep, now: this.now, selfAddon: this.selfAddon, fetchManifest: this.fetchManifest });
       this.services.set(accountId, service);
     }
     return service;
