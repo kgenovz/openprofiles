@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fake-stremio",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/dev-stremio.js"],
+      "port": 7001
+    },
+    {
+      "name": "openprofiles-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/server.js"],
+      "port": 7000,
+      "env": {
+        "PUBLIC_URL": "http://localhost:7000",
+        "ADMIN_PASSWORD": "devpassword",
+        "DATA_DIR": "./data-dev",
+        "STREMIO_API_URL": "http://localhost:7001"
+      }
+    }
+  ]
+}

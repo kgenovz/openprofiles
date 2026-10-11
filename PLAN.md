@@ -1,0 +1,198 @@
+# OpenProfiles: a self-hosted profile switcher for Stremio (plan)
+
+Status: M1 in progress (2026-10-10). Repo: `kgenovz/openprofiles`. StremShare's swap-in profile
+wind-down (docs/snapshot-profiles-retirement-plan.md in the StremShare repo) links here via
+`SNAPSHOT_PROFILES_SPINOFF_URL`.
+
+## What it is
+
+A small, open-source add-on you run yourself (one Docker container) that gives one Stremio
+account several profiles. Each profile is a saved library, add-on list and notification set.
+Switching saves the current state into the outgoing profile and writes the incoming one to the
+account. You switch from a web page or from a "Switch profile" row inside Stremio.
+
+It is StremShare's swap-in profiles, minus everything StremShare-specific (templates, rec
+rails, curator, catalog memory, watch-history stamping), written fresh.
+
+**Who it's for:** households on a free Stremio account. Stremio Supporter accounts have native
+profiles, which are better (all work at once); the README and the setup page say so.
+
+**Non-goals (v1):** multi-tenant hosting for strangers, watch-history tracking, per-profile
+catalogs, anything StremShare does.
+
+## Naming
+
+- Product name: **OpenProfiles** (inside Stremio the add-on shows as "OpenProfiles").
+- Repo/package: `openprofiles` (`kgenovz/openprofiles`). Doesn't lead with the Stremio trademark.
+- License: MIT (in the repo).
+
+## Shape
+
+- Node 20+, Express (or Fastify), better-sqlite3, one process. No stremio-addon-sdk: we need
+  custom routes (configure page, videos, PNG posters) and side-effecting stream GETs.
+- **Single-tenant by design:** one instance serves one Stremio account. Multi-account is a
+  later maybe. This keeps auth simple and the blast radius small.
+- `docker compose up` with one volume (`/data`: SQLite DB + generated secret key). Publish an
+  image to GHCR. Env: `PUBLIC_URL` (required, https), `ADMIN_PASSWORD` (required), optional
+  `DATA_DIR`, `PORT`, `LOG_LEVEL`.
+- Secrets: a 32-byte key generated into `/data/secret.key` on first boot (or `SECRET_KEY` env).
+  AES-256-GCM for the Stremio authKey and all snapshot blobs (add-on transport URLs carry
+  debrid keys; libraries are personal data).
+- **Add-on URL carries an unguessable token**: `PUBLIC_URL/<token>/manifest.json`. A stream GET
+  performs a switch, so the URL is a bearer secret. Rotate from the web page.
+- Web page (`/configure`) behind `ADMIN_PASSWORD` (session cookie, SameSite=Strict, CSRF on
+  writes, rate-limited login).
+
+## Data model (SQLite)
+
+- `account`: one row. stremio_user_id, stremio_email, auth_key_enc, linked_at.
+- `profiles`: id, name (unique), avatar (preset id + colour), library_enc, addons_enc,
+  notifs_enc, library_count (excl. tombstones), addon_count, notif_count, snapshot_taken_at,
+  stremio_user_id (anchor), created_at.
+- `state`: active_profile_id, addon_token.
+- `backups`: id, kind (`original` | `auto` | `pre_switch` | `pre_restore` | `manual` |
+  `imported`), label, blobs, counts, stremio_user_id, created_at. Retention: original never
+  pruned; auto keep 7 (max 1/day); pre_switch keep 5; pre_restore keep 3; manual keep 10.
+- `switch_journal`: id, from_profile_id, to_profile_id, phase, started_at, finished_at, error.
+  (StremShare had no journal; see "Switch algorithm".)
+
+## Switch algorithm (with StremShare's lessons built in)
+
+One switch at a time (process-wide mutex; single tenant). Steps:
+
+1. **Already active?** Return immediately, no API calls (the in-Stremio stream can fire twice;
+   stream prefetch and detail-page opens can hit it too, so it must be idempotent).
+2. Validate the token with `getUser`. Map auth errors to "sign in again", network errors to
+   "Stremio unreachable", 429/503/529 to "Stremio is busy, try again in a minute".
+3. **Account anchor:** refuse if the target profile's `stremio_user_id` differs from the linked
+   account (applying A's snapshot to B overwrites B's library and debrid-keyed add-ons).
+4. **Target guard (StremShare missed this):** decrypt the target's library/add-ons BEFORE any
+   write. Refuse if a blob can't be decrypted, isn't an array, or `library_count > 0` but the
+   decoded array is empty. Refuse an empty add-on list (writing `[]` uninstalls Cinemeta and
+   everything else). Enforce caps: 10,000 library items, 50 add-ons. Throw, never truncate.
+5. Read live library (`datastoreGet libraryItem all:true`), add-ons (`addonCollectionGet`) and
+   notifications (via `datastoreMeta` + `datastoreGet ids`; `all:true` fails with 5994) in
+   parallel. A failed library or add-on read aborts. A failed notification read = `null`
+   ("couldn't read"), not `[]`.
+6. **Journal `started`** and take a `pre_switch` backup of the live state. If it fails, abort.
+7. **Save the outgoing profile** (library + add-ons + notifications in one transaction; keep the
+   old notification blob if the read failed). Capture-side scrub: zero the resume fields on
+   every `removed:true` item (Stremio's notification worker re-pollutes tombstones and they
+   creep back into Continue Watching after a few switches).
+8. **Write the library** (diff-based full replace via `datastorePut changes:[…]`, chunks of 150,
+   75 ms apart; upserts by `_id`, so retries are safe):
+   - Items live now but missing from the target are tombstoned with the FULL original item
+     (a minimal tombstone fails with "JSON unmarshal err"): `removed:true`, `temp:false`, zero
+     `timeOffset/timeWatched/timesWatched/flaggedWatched/overallTimeWatched`, blank
+     `lastWatched/video_id/watched`, `noNotif:true`, zero season/episode, `_mtime` now.
+   - Target items pushed verbatim (keep `state`, `temp`, `removed`), with staggered `_mtime`s:
+     sort by `state.lastWatched` desc, assign `now - i` ms (the home Continue Watching row
+     sorts by `_mtime`; identical values scramble it).
+   - `_mtime` is an RFC 3339 string (`toISOString()`); a millisecond integer gets a 400.
+9. **Write add-ons** (`addonCollectionSet`, full-list replace, array order = display order),
+   **making sure the Profiles add-on itself is in the list** (insert it if the target profile's
+   list lacks it, keep its URL current). Otherwise the switcher row vanishes after switching
+   into a profile captured before Profiles was installed. Best-effort: on failure, record it
+   in the journal and continue (the library is already swapped; throwing would leave the
+   pointer unflipped and a retry would save the swapped library into the outgoing profile).
+10. **Write notifications** (`notifItem`, chunks of 100; tombstone = `dismissed/seen/delivered`
+    all true; leave `_mtime` alone). Swap even when the target set is empty ("clean slate"),
+    else the user gets new-episode pings for shows outside the profile. Skip if the live read
+    failed. Best-effort.
+11. **Flip `active_profile_id`**, journal `finished`.
+
+**Recovery (new):** on boot and before any switch, an unfinished journal row means a switch died
+mid-write. Show it on the web page with two buttons: "Finish switching to X" (re-run from step 8
+with the saved target) and "Go back to Y" (restore the `pre_switch` backup). Never auto-save
+live state while a journal row is open (that is how StremShare could save a half-swapped
+library over the good outgoing snapshot).
+
+**Dropped from StremShare:** resume-position healing and cross-profile exclusion. Both depend
+on StremShare's scrobble table, which Profiles doesn't have. Mitigation: "Save now" on the web
+page and a hint ("finished watching on another device? save before switching"). Possible v2:
+compare live item `state.timeOffset` vs the stored one per `_id` and only ever advance.
+
+## In-Stremio switcher
+
+- Manifest: catalog `{ id:'profiles', type:<'other' or similar>, name:'Switch profile' }`, the
+  type listed in `types[]`, and ONE `meta` resource with `idPrefixes:['profiles:']` (stremio-core
+  only matches the first `meta` resource; without it Stremio shows "No addons were requested
+  for this meta" and never asks for streams). Resources: catalog, meta, stream.
+- Catalog: one meta per profile, `id: profiles:<id>`, `posterShape:'square'`, **PNG posters**
+  (mobile can't decode SVG), the active profile gets a poster with a baked-in checkmark (mobile
+  grids show nothing else). Generate posters at boot with `sharp` (initial on colour).
+- Meta: minimal (name, poster, background, description), echo the requested type; 404 for
+  unknown ids.
+- Stream GET **performs the switch**, then returns one stream
+  `{ name, description, url: PUBLIC_URL/switching.mp4, behaviorHints:{ notWebReady:true } }`;
+  errors return `/switch-error.mp4` with the reason in `description` (put the key line first:
+  mobile pickers truncate). Playing the clip is optional; it covers the refresh.
+- Tell the user: "Close and reopen Stremio" (the only refresh that works on every client).
+- Make our own short clips (no third-party footage). `Cache-Control: no-store` on catalog and
+  stream responses.
+
+## Web page
+
+- First run: sign in with Stremio email + password → authKey (password never stored). Refuse a
+  native child-profile key (`getUser` has `parent_id`). If the account has native profiles
+  (`premiumPrefs.userProfiles`), warn: "your Stremio account has its own profiles; Profiles
+  would swap the library inside whichever one is open."
+- Setup creates "Original" (current state, also the immutable `original` backup) and offers
+  "New empty profile" (same add-ons, empty library and notifications).
+- Profile list: switch, save now, rename, avatar, delete (not the active one), "create from
+  current" / "create empty".
+- Backups: list by kind, restore (preview counts first; take `pre_restore`), download, delete.
+- **Import from StremShare:** upload a StremShare backup export (`format:
+  "stremshare-account-backup"`, `version: 1`; spec in docs/snapshot-profiles-retirement-plan.md
+  appendix) → becomes a new profile (or a backup). Refuse when its `stremio_user_id` differs
+  from the linked account, unless the user ticks "this is a different account, I understand".
+- Add-on link with copy, "Install in Stremio" deep link, rotate.
+- Unfinished-switch banner (journal recovery).
+
+## Stremio API client (reference)
+
+POST `https://api.strem.io/api/<method>` with a JSON body. Retry up to 4 times with exponential
+backoff + jitter on 429/500/502/503/504/529 and network errors, honouring `Retry-After`. Never put
+response bodies in error messages or logs (Stremio echoes submitted fields). Never log add-on
+transport URLs.
+
+| Need | Method | Body |
+|---|---|---|
+| Sign in | `login` | `{ email, password, type:'Login', facebook:false }` → `result.authKey` |
+| Who am I | `getUser` | `{ type:'GetUser', authKey }` → `_id`, `email`, `parent_id?`, `premiumPrefs` |
+| Library read | `datastoreGet` | `{ authKey, collection:'libraryItem', all:true }` → array (throw on non-array) |
+| Library write | `datastorePut` | `{ authKey, collection:'libraryItem', changes:[…] }` |
+| Notif ids | `datastoreMeta` | `{ authKey, collection:'notifItem' }` → `[[id, mtime], …]` |
+| Notif read | `datastoreGet` | `{ authKey, collection:'notifItem', ids:[…] }` |
+| Add-ons read | `addonCollectionGet` | `{ type:'AddonCollectionGet', authKey, update:true }` → `result.addons` |
+| Add-ons write | `addonCollectionSet` | `{ type:'AddonCollectionSet', authKey, addons:[…] }` (full replace) |
+
+## Milestones
+
+1. **M1 core:** sign-in, profiles CRUD, switch from the web page with the full algorithm +
+   journal + backups. Tests against a mocked Stremio API (diff/tombstone rules, target guard,
+   empty add-on refusal, journal recovery, idempotent re-switch).
+   *Built 2026-10-10, not yet tried on a real account.* Decisions made while building:
+   - Steps 6 and 7 (pre_switch backup, outgoing save, journal open) are one SQLite transaction,
+     so recovery only ever restarts at step 8.
+   - Restores use the same journal (`kind: 'restore'`) and the same Finish / Go back recovery.
+   - Clean tombstones aren't re-written (live or target side); tombstones pile up across
+     switches, so this keeps each switch's writes close to the real difference.
+   - A profile with no saved notifications (`notifs_enc` NULL) skips the notification swap
+     with a warning rather than treating it as a clean slate.
+   - The add-on write is skipped when the target list equals the live one.
+   - `scripts/dev-stremio.js` serves the test fake over HTTP for trying the web page locally.
+2. **M2 in-Stremio switcher:** manifest/catalog/meta/stream, PNG posters, clips, self-insert of
+   the Profiles add-on into every profile's add-on list.
+3. **M3 ship:** StremShare import, Docker image on GHCR, README (setup, Supporter warning,
+   "switching rewrites the library on every device", backup/restore, recovery), MIT license,
+   CI (lint + tests). Live test on a burner Stremio account across desktop, Android, TV.
+4. **Then** set `SNAPSHOT_PROFILES_SPINOFF_URL` on StremShare prod and start the wind-down.
+
+Later maybes: multi-account instances, scheduled auto backups, resume healing v2.
+
+## Open questions for Kyle
+
+- Single-tenant only for v1? (Plan assumes yes.)
+- Catalog type for the switcher row (StremShare uses its translated "all" type; pick what reads
+  best on Home in v5).
