@@ -31,8 +31,8 @@ export function autoRefreshTarget(userAgent = '') {
 function handoffPage(target) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>OpenProfiles</title></head>
-<body style="margin:0;min-height:100vh;background:#0f0f14">
-<a href="${target}" style="position:fixed;left:0;right:0;bottom:32px;text-align:center;color:#6b6b78;font:14px system-ui,sans-serif;text-decoration:none">Back to Stremio</a>
+<body style="margin:0;min-height:100vh;background:#0f0f14;display:grid;place-items:center">
+<a href="${target}" style="display:inline-block;padding:14px 28px;border-radius:12px;background:#8b6dff;color:#fff;font:700 17px system-ui,sans-serif;text-decoration:none">Back to Stremio</a>
 </body></html>`;
 }
 
@@ -106,12 +106,24 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
   }
 
   /**
-   * Tapping this opens /refresh/go, which redirects straight back into
-   * Stremio with a stremio:// deep link (no page renders). Leaving and
-   * re-entering the app makes it re-sync; see autoRefreshTarget.
+   * The "tap to refresh" stream; `userAgent` is the one on the stream request.
+   *   - Desktop (a browser user agent: Stremio 5 runs in WebView2): open
+   *     /refresh/go in the browser, which redirects back to Home. Leaving and
+   *     re-entering the window re-syncs (stremio-web re-syncs on focus). A
+   *     direct stremio:// link doesn't work here: the desktop app hands every
+   *     stream link to the browser, which can't open it (tested 2026-10-11).
+   *   - Android app (sends no user agent): the stream's link is the deep
+   *     link itself. The app hands it straight back to itself and reloads, with
+   *     no browser. Via the browser, Chrome wouldn't follow the redirect into
+   *     an app without a tap on the page. Live-tested on a Galaxy S22, 2026-10-11.
    */
-  function refreshStream(description) {
-    return { name: 'OpenProfiles', description, externalUrl: `${publicUrl}/refresh/go?to=auto` };
+  function refreshStream(description, userAgent = '') {
+    const desktop = /Windows NT|Macintosh|X11|CrOS/.test(userAgent);
+    return {
+      name: 'OpenProfiles',
+      description,
+      externalUrl: desktop ? `${publicUrl}/refresh/go?to=auto` : REDIRECT_TARGETS.library,
+    };
   }
 
   // An HTTP redirect into the app. Browsers still show the response body while
@@ -195,7 +207,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
     if (result.warnings?.length) lines.push("Some parts didn't switch. The OpenProfiles page has details.");
     return res.json({
       streams: [
-        refreshStream(lines.join('\n')),
+        refreshStream(lines.join('\n'), req.get('user-agent')),
         stream("Didn't refresh? Close and reopen Stremio.\nThis clip is just a reminder."),
       ],
     });

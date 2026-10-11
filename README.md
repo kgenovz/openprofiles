@@ -22,8 +22,8 @@ Things to know:
 
 - **Switching changes every device signed in to the account.** Everyone sees the same profile.
 - **Refreshing after a switch:** in the Switch profile row, tap the profile's first stream
-  ("Tap here to refresh Stremio"). It hops out to the server and straight back, which makes
-  Stremio reload: Home on desktop, your Library on Android (then go back Home). After switching
+  ("Tap here to refresh Stremio"). Stremio reloads and lands on Home on desktop (after a quick
+  hop through the browser), or on your Library on Android (then go back Home). After switching
   from the settings page, just click back into the Stremio window. Apps where that doesn't work
   (older or TV apps) need a close and reopen.
 - **Save before switching** if you finished watching something on another device. Use *Save now*

@@ -157,13 +157,17 @@ describe('add-on routes', () => {
     }
     const [refresh, clip] = first.body.streams;
     assert.match(refresh.description, /^Switched to Kids/);
-    assert.equal(refresh.externalUrl, `${PUBLIC_URL}/refresh/go?to=auto`, 'tapping it bounces Stremio out and back so it re-syncs');
+    assert.equal(refresh.externalUrl, 'stremio:///library', 'no browser user agent (the Android app): deep link straight back in');
     assert.equal(clip.url, `${PUBLIC_URL}/clips/switching.mp4`);
     assert.equal(clip.behaviorHints.notWebReady, true);
 
     const puts = ctx.fake.calls.length;
     const again = await get(path);
     assert.match(again.body.streams[0].description, /^Kids is in use/);
+    const desktop = await (await fetch(base + path, {
+      headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36 Edg/141.0' },
+    })).json();
+    assert.equal(desktop.streams[0].externalUrl, `${PUBLIC_URL}/refresh/go?to=auto`, 'desktop bounces through the browser so the window refocuses');
     assert.equal(ctx.fake.calls.length, puts + 0, 'already active: no Stremio calls');
   });
 

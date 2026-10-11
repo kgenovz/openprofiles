@@ -133,19 +133,25 @@ compare live item `state.timeOffset` vs the stored one per `_id` and only ever a
   errors return `/switch-error.mp4` with the reason in `description` (put the key line first:
   mobile pickers truncate). Playing the clip is optional; it covers the refresh.
 - ~~Tell the user: "Close and reopen Stremio" (the only refresh that works on every client).~~
-  **Refresh without a restart (2026-10-11):** the success stream carries
-  `externalUrl: PUBLIC_URL/refresh/go?to=auto`, a bare 302 to a `stremio://` deep link (no
-  page renders). Leaving and re-entering the app makes it re-sync. A second stream keeps the
-  clip + "close and reopen" fallback.
+  **Refresh without a restart (2026-10-11):** the success stream's `externalUrl` makes Stremio
+  leave and re-enter, which re-syncs. Desktop gets `PUBLIC_URL/refresh/go?to=auto` (a 302 to a
+  `stremio://` deep link, behind a dark hand-off page), Android gets the deep link directly.
+  A second stream keeps the clip + "close and reopen" fallback.
   - Desktop (Stremio 5 runs stremio-web): `PullAddonsFromAPI`, `PullUserFromAPI`,
     `SyncLibraryWithAPI` and `PullNotifications` fire on mount and on window `focus` only
-    (src/App/App.js). Redirect to `stremio:///` (Home). Current stremio-web has no `/board`
+    (src/App/App.js). Redirect to `stremio:///` (Home). A direct `stremio://` stream link fails
+    on desktop: the app hands every stream link to the browser, which can't open it. Current
+    stremio-web has no `/board`
     route: it shows "page not found". Switching from the settings page needs only a click back
     into Stremio.
-  - Android (tested on a Galaxy S22): Home re-syncs the library but keeps the old add-ons on
-    Home; `stremio:///library` (or `/addons`) reloads everything once you go back Home, so
-    Android redirects there. Intents (`intent://…package=com.stremio.one`) do nothing. Chained
-    deep links from the page don't fire: the browser runs the next one only when reopened.
+  - Android (tested on a Galaxy S22): the stream's `externalUrl` is `stremio:///library`
+    itself. The app opens its own deep link with no browser and reloads. That works perfectly.
+    The browser route doesn't: Chrome won't follow a redirect (or script) into an app without
+    a tap on the page when another app opened it. Library (or `/addons`) is the target because
+    Home re-syncs the library but keeps the old add-ons on Home; Library reloads everything
+    once you go back Home. Intents (`intent://…package=com.stremio.one`) do nothing; chained
+    deep links don't fire. The Android app's stream request has no User-Agent, while desktop
+    (WebView2) sends a Windows browser one, which is how the stream picks the link.
   - Library sync is a two-way merge by `_mtime` (client pushes its newer items back), so the
     switch's now-stamped writes and tombstones are what make it a switch, not a merge.
   - Unverified: Android TV, iOS, Stremio 4.
