@@ -123,6 +123,8 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
       name: 'OpenProfiles',
       description,
       externalUrl: desktop ? `${publicUrl}/refresh/go?to=auto` : REDIRECT_TARGETS.library,
+      // Stremio's TV apps use their own link field (a TV has no browser). Being tested on Android TV.
+      androidTvUrl: REDIRECT_TARGETS.library,
     };
   }
 
