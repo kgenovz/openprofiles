@@ -30,6 +30,8 @@ function main() {
     log.warn('ADMIN_PASSWORD is no longer used: people sign in with their Stremio account. Remove it from your settings.');
   }
 
+  // Everything this process writes (database, WAL, nightly snapshots) is for its own user only.
+  process.umask(0o077);
   fs.mkdirSync(config.dataDir, { recursive: true });
   const key = loadOrCreateKey(config);
   const cipher = new Cipher(key);

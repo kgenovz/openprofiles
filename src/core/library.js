@@ -116,7 +116,10 @@ export function buildLibraryChanges(live, target, now = Date.now()) {
   stats.unchanged += targets.length - ordered.length;
   ordered.forEach((item, i) => {
     changes.push({ ...item, _mtime: new Date(now - i).toISOString() });
-    stats.restored++;
+    // A removed (not temp) item in the target hides a title in this profile, so for the log
+    // it counts with the tombstones; everything else is a title the profile brings back.
+    if (item.removed === true && item.temp !== true) stats.tombstoned++;
+    else stats.restored++;
   });
 
   return { changes, stats };

@@ -37,7 +37,8 @@ describe('buildLibraryChanges', () => {
       libItem('gone', { removed: true, mtime: '2019-01-01T00:00:00.000Z' }),
     ];
     const { changes, stats } = buildLibraryChanges([], target, NOW);
-    assert.equal(stats.restored, 4);
+    assert.equal(stats.restored, 3);
+    assert.equal(stats.tombstoned, 1, "the target's own tombstone counts as hiding a title");
     assert.deepEqual(changes.map((c) => c._id), ['newest', 'old', 'never', 'gone']);
     const mtimes = changes.map((c) => c._mtime);
     assert.ok(mtimes.every((m) => typeof m === 'string' && /Z$/.test(m)));
