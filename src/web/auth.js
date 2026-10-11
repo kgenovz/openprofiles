@@ -84,7 +84,8 @@ export function createAuth({ db, config, now = () => Date.now() }) {
 
     csrf(req, res, next) {
       if (req.method !== 'POST') return next();
-      const sent = req.body?._csrf;
+      // Forms send a hidden field; the import upload (fetch) sends a header.
+      const sent = req.get('x-csrf-token') ?? req.body?._csrf;
       if (typeof sent === 'string' && safeEqual(sent, req.session.csrf)) return next();
       return res.status(403).send('This form expired. Go back, reload the page and try again.');
     },

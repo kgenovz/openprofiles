@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import opentype from 'opentype.js';
 import sharp from 'sharp';
+import { isBust, pictureSvg } from './avatars.js';
 
 /**
  * Poster, background and clip-frame artwork, drawn as SVG paths from bundled
@@ -109,13 +110,35 @@ const png = (svg) => sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuff
 
 export const POSTER_SIZE = 512;
 
-export function posterSvg({ name, colour, active }) {
+/** The letter (or person glyph) centred on (cx, cy). */
+function letterSvg(name, cx, cy, size) {
+  const initial = initialOf(name);
+  return initial
+    ? `<path d="${centredLine(initial, 800, size, cx, cy)}" fill="#ffffff"/>`
+    : `<path d="${personPath(cx, cy, size * 0.8)}" fill="#ffffff"/>`;
+}
+
+/** Picture or letter filling the area [0, areaH) of a W-wide image. */
+function faceSvg({ name, avatar }, W, areaH) {
+  if (avatar && avatar !== 'initial') {
+    const size = Math.round(Math.min(W, areaH) * (isBust(avatar) ? 0.86 : 0.84));
+    const x = Math.round((W - size) / 2);
+    const y = isBust(avatar) ? areaH - size : Math.round((areaH - size) / 2);
+    const svg = pictureSvg(avatar, { x, y, size });
+    if (svg) return svg;
+  }
+  return letterSvg(name, W / 2, areaH / 2 + W * 0.03, W * 0.52);
+}
+
+/** Square picture tile (no name band) for the web page and the picture picker. */
+export function avatarTileSvg({ name, colour, avatar, size = 256 }) {
+  return svgDoc(size, size, `<rect width="${size}" height="${size}" fill="${colour}"/>${faceSvg({ name, avatar }, size, size)}`);
+}
+
+export function posterSvg({ name, colour, active, avatar = 'initial' }) {
   const W = POSTER_SIZE;
   const bandH = Math.round(W * 0.22);
-  const initial = initialOf(name);
-  const glyph = initial
-    ? `<path d="${centredLine(initial, 800, W * 0.52, W / 2, (W - bandH) / 2 + W * 0.03)}" fill="#ffffff"/>`
-    : `<path d="${personPath(W / 2, (W - bandH) / 2, W * 0.42)}" fill="#ffffff"/>`;
+  const glyph = faceSvg({ name, avatar }, W, W - bandH);
   const label = drawable(String(name).trim(), 700);
   const fitted = fitLine(label, 700, W * 0.085, W * 0.88);
   const ring = active ? Math.round(W * 0.027) : 0;
@@ -129,15 +152,20 @@ export function posterSvg({ name, colour, active }) {
   ].join(''));
 }
 
-export function backgroundSvg({ name, colour }) {
+export function backgroundSvg({ name, colour, avatar = 'initial' }) {
   const W = 1280;
   const H = 720;
   const initial = initialOf(name);
+  const size = Math.round(H * 0.9);
+  const picture = pictureSvg(avatar, { x: Math.round(W * 0.78 - size / 2), y: H - size, size });
+  const faint = picture
+    ? `<g opacity="0.22">${picture}</g>`
+    : initial ? `<path d="${centredLine(initial, 800, H * 1.1, W * 0.78, H * 0.5)}" fill="#ffffff" fill-opacity="0.12"/>` : '';
   return svgDoc(W, H, [
-    `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.45"/></linearGradient></defs>`,
+    `<defs><linearGradient id="op-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.45"/></linearGradient></defs>`,
     `<rect width="${W}" height="${H}" fill="${colour}"/>`,
-    initial ? `<path d="${centredLine(initial, 800, H * 1.1, W * 0.78, H * 0.5)}" fill="#ffffff" fill-opacity="0.12"/>` : '',
-    `<rect width="${W}" height="${H}" fill="url(#g)"/>`,
+    faint,
+    `<rect width="${W}" height="${H}" fill="url(#op-bg)"/>`,
   ].join(''));
 }
 
@@ -182,6 +210,7 @@ export function logoSvg() {
 
 export const renderLogo = () => png(logoSvg());
 export const renderPoster = (opts) => png(posterSvg(opts));
+export const renderAvatarTile = (opts) => png(avatarTileSvg(opts));
 export const renderBackground = (opts) => png(backgroundSvg(opts));
 export const renderClipFrame = (opts) => png(clipFrameSvg(opts));
 

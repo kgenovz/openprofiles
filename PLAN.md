@@ -202,6 +202,16 @@ transport URLs.
 3. **M3 ship:** StremShare import, Docker image on GHCR, README (setup, Supporter warning,
    "switching rewrites the library on every device", backup/restore, recovery), MIT license,
    CI (lint + tests). Live test on a burner Stremio account across desktop, Android, TV.
+   *Built 2026-10-10 except the live test.* Notes:
+   - Import reads both StremShare formats (v1 `format`/`version`, and pre-v1 `schemaVersion`),
+     saves an `imported` backup and optionally a profile, and never writes to Stremio. A file
+     whose account doesn't match, or can't be told, needs a confirm tick. The upload is held
+     server-side for 15 minutes between the preview and confirm steps.
+   - Profile pictures (added alongside M3): letter, eleven hand-drawn characters (including
+     "Spark", Claude's self-portrait), or DiceBear faces from CC0 styles only. Stored in
+     `avatar_preset` as `initial`, `char:<id>` or `gen:<style>:<seed>`.
+   - Node 22+ (better-sqlite3 13 requires it). Image: `node:22-bookworm-slim`, runs as `node`,
+     multi-arch (amd64, arm64), published by `.github/workflows/docker.yml`.
 4. **Then** set `SNAPSHOT_PROFILES_SPINOFF_URL` on StremShare prod and start the wind-down.
 
 Later maybes: multi-account instances, scheduled auto backups, resume healing v2.

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { CHARACTERS, GENERATED_STYLES, avatarLabel, parseAvatar, randomSeed } from '../addon/avatars.js';
 import { AVATAR_COLOURS } from '../core/service.js';
 import { html } from './html.js';
 
@@ -41,7 +42,40 @@ function postButton({ action, csrf, label, style = '', confirm, disabled = false
   </form>`;
 }
 
-const initialOf = (name) => [...name][0]?.toLocaleUpperCase() || '?';
+const pictureVersion = (p) => crypto.createHash('sha1').update(`${p.name}|${p.avatar_colour}|${p.avatar_preset}`).digest('hex').slice(0, 8);
+
+function previewSrc(avatar, p) {
+  return `/avatars/preview.svg?${new URLSearchParams({ avatar, colour: p.avatar_colour, name: p.name })}`;
+}
+
+/**
+ * Picture choices in three tabs (Letter / Characters / Generated). Without
+ * JavaScript all three groups simply show; app.js turns them into tabs and
+ * wires Shuffle and the live colour preview.
+ */
+function picturePicker(p) {
+  const current = parseAvatar(p.avatar_preset) ?? { kind: 'initial' };
+  const option = (value, label) => html`<label class="pic">
+    <input type="radio" name="picture" value="${value}" ${value === p.avatar_preset ? 'checked' : ''}>
+    <img src="${previewSrc(value, p)}" alt="" width="64" height="64" data-avatar="${value}" loading="lazy">
+    <span class="sr-only">${label}</span>
+  </label>`;
+  const generated = Object.entries(GENERATED_STYLES).flatMap(([id, s]) => [1, 2].map(() => ({ value: `gen:${id}:${randomSeed()}`, label: `${s.label} face` })));
+  if (current.kind === 'gen') generated.unshift({ value: p.avatar_preset, label: avatarLabel(p.avatar_preset) });
+  const tab = current.kind === 'gen' ? 'gen' : current.kind === 'char' ? 'char' : 'letter';
+  return html`<fieldset class="picker" data-tab="${tab}">
+    <legend>Picture</legend>
+    <div class="picker-tabs" role="tablist" hidden>
+      <button type="button" role="tab" data-tab-for="letter">Letter</button>
+      <button type="button" role="tab" data-tab-for="char">Characters</button>
+      <button type="button" role="tab" data-tab-for="gen">Generated</button>
+    </div>
+    <div class="pic-grid" data-tab-panel="letter">${option('initial', 'Letter')}</div>
+    <div class="pic-grid" data-tab-panel="char">${Object.entries(CHARACTERS).map(([id, c]) => option(`char:${id}`, c.label))}</div>
+    <div class="pic-grid" data-tab-panel="gen">${generated.map((g) => option(g.value, g.label))}</div>
+    <button type="button" class="shuffle" data-shuffle hidden>Shuffle faces</button>
+  </fieldset>`;
+}
 
 const icon = {
   logo: html`<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3 3-4.6 5.5-4.6s4.7 1.6 5.5 4.6"/><path d="M16 5.5a3 3 0 0 1 0 5.6M18 14.6c1.3.6 2.2 2 2.6 4.4"/></svg>`,
@@ -161,7 +195,7 @@ function recoveryBanner(j, csrf) {
 function profileCard(p, { active, csrf, locked }) {
   return html`<article class="profile ${active ? 'is-active' : ''}">
     <div class="profile-banner" style="background:${p.avatar_colour}">
-      <span class="profile-initial" aria-hidden="true">${initialOf(p.name)}</span>
+      <img src="/avatars/profile/${p.id}.svg?v=${pictureVersion(p)}" alt="" width="256" height="256">
       ${active ? html`<span class="pill">In use</span>` : ''}
     </div>
     <div class="profile-body">
@@ -182,10 +216,11 @@ function profileCard(p, { active, csrf, locked }) {
               <label>Name <input name="name" value="${p.name}" maxlength="40" required></label>
               <button type="submit">Rename</button>
             </form>
-            <form method="post" action="/profiles/${p.id}/avatar" class="stack">
+            <form method="post" action="/profiles/${p.id}/avatar" class="stack" data-picture-form>
               ${csrfField(csrf)}
+              ${picturePicker(p)}
               ${colourPicker('colour', p.avatar_colour)}
-              <button type="submit">Save colour</button>
+              <button type="submit">Save picture</button>
             </form>
             ${active ? html`<p class="hint">The profile in use can't be deleted.</p>` : postButton({ action: `/profiles/${p.id}/delete`, csrf, label: 'Delete profile', style: 'danger', confirm: `Delete "${p.name}"? Its saved library, add-ons and notifications are gone for good.` })}
           </div>
@@ -224,6 +259,33 @@ function addonCard(addon, csrf) {
         ${postButton({ action: '/addon/rotate', csrf, label: 'Get a new link', style: 'danger', confirm: 'Make a new add-on link? The current one stops working.' })}
       </div>
     </details>
+  </section>`;
+}
+
+/** Two steps: app.js uploads the file for a summary, then this form confirms it. */
+function importCard(csrf) {
+  return html`<section class="card" id="import">
+    <h2>Import from StremShare</h2>
+    <p class="lede">In StremShare, open Tools › Backup &amp; restore and download a backup, then choose
+      it here. It's kept as a backup and, if you like, added as a new profile. Nothing changes in
+      Stremio until you switch to that profile or restore the backup.</p>
+    <label>Backup file <input type="file" accept=".json,application/json" data-import-file data-csrf="${csrf}"></label>
+    <p class="hint" data-import-status role="status"></p>
+    <form method="post" action="/import/confirm" class="stack" data-import-confirm hidden>
+      ${csrfField(csrf)}
+      <input type="hidden" name="id">
+      <p data-import-summary></p>
+      <fieldset>
+        <legend>Save it as</legend>
+        <label class="radio"><input type="radio" name="as" value="profile" checked> A new profile (plus a backup)</label>
+        <label class="radio"><input type="radio" name="as" value="backup"> Only a backup</label>
+      </fieldset>
+      <label>Profile name <input name="name" maxlength="40"></label>
+      <label class="radio" data-import-other hidden><input type="checkbox" name="acceptOtherAccount" value="1">
+        <span data-import-other-text></span></label>
+      <button type="submit" class="primary">Import</button>
+    </form>
+    <noscript><p class="hint">Importing needs JavaScript turned on.</p></noscript>
   </section>`;
 }
 
@@ -293,6 +355,8 @@ export function dashboardPage({ csrf, flash, status, backups, journal, addon }) 
         </tbody>
       </table></div>
     </section>
+
+    ${importCard(csrf)}
 
     <section class="card">
       <h2>Recent activity</h2>

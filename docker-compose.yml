@@ -1,0 +1,18 @@
+# OpenProfiles needs to be reachable over https (Stremio only installs https add-ons).
+# Put it behind a reverse proxy such as Caddy; see README.md.
+services:
+  openprofiles:
+    image: ghcr.io/kgenovz/openprofiles:latest
+    container_name: openprofiles
+    restart: unless-stopped
+    environment:
+      PUBLIC_URL: https://profiles.example.com   # the https address Stremio will use
+      ADMIN_PASSWORD: change-me-to-something-long
+      # LOG_LEVEL: info
+    volumes:
+      - openprofiles-data:/data                  # database + secret key: back this up
+    ports:
+      - "127.0.0.1:7000:7000"                    # only the reverse proxy should reach it
+
+volumes:
+  openprofiles-data:

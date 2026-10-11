@@ -45,7 +45,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
   const base = (token) => `${publicUrl}/${token}`;
 
   function posterUrl(token, p, active) {
-    return `${base(token)}/poster/${p.id}.png?v=${artVersion(p.name, p.avatar_colour, active)}`;
+    return `${base(token)}/poster/${p.id}.png?v=${artVersion(p.name, p.avatar_colour, p.avatar_preset, active)}`;
   }
 
   function preview(token, p, active) {
@@ -109,7 +109,7 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
         ...preview(state.addon_token, p, active),
         // Echo the requested type: Stremio drops a meta whose type differs from the request.
         type: req.params.type,
-        background: `${base(state.addon_token)}/background/${p.id}.png?v=${artVersion(p.name, p.avatar_colour)}`,
+        background: `${base(state.addon_token)}/background/${p.id}.png?v=${artVersion(p.name, p.avatar_colour, p.avatar_preset)}`,
         behaviorHints: { defaultVideoId: profileMetaId(p.id) },
       },
     });
@@ -149,14 +149,16 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
     const p = service.repo.getProfile(Number(req.params.id));
     if (!p) return res.status(404).end();
     const active = p.id === state.active_profile_id;
-    const png = await art.get(`poster|${p.name}|${p.avatar_colour}|${active}`, () => renderPoster({ name: p.name, colour: p.avatar_colour, active }));
+    const png = await art.get(`poster|${p.name}|${p.avatar_colour}|${p.avatar_preset}|${active}`,
+      () => renderPoster({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, active }));
     res.set('Cache-Control', 'private, max-age=86400').type('png').send(png);
   }));
 
   router.get('/:token/background/:id.png', withToken(async (req, res) => {
     const p = service.repo.getProfile(Number(req.params.id));
     if (!p) return res.status(404).end();
-    const png = await art.get(`bg|${p.name}|${p.avatar_colour}`, () => renderBackground({ name: p.name, colour: p.avatar_colour }));
+    const png = await art.get(`bg|${p.name}|${p.avatar_colour}|${p.avatar_preset}`,
+      () => renderBackground({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset }));
     res.set('Cache-Control', 'private, max-age=86400').type('png').send(png);
   }));
 

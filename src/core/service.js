@@ -1,18 +1,20 @@
 import { randomToken } from '../crypto.js';
 import { silentLogger } from '../log.js';
 import { GuardError, MAX_ADDONS, MAX_LIBRARY_ITEMS, decodeSnapshot } from './guard.js';
+import { parseStremShareBackup, sameAccount, suggestedProfileName } from './importer.js';
 import {
-  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, hasId, scrubTombstones,
+  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, hasId, scrubTombstones,
 } from './library.js';
 import { Mutex } from './lock.js';
+import { isValidAvatar } from '../addon/avatars.js';
 import { ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
 
 // Each clears 3.5:1 under a white initial (see the poster artboard in the M2 design).
 export const AVATAR_COLOURS = ['#e5484d', '#e05d0c', '#b7790b', '#3b8f4b', '#0f8f80', '#0a7fe0', '#8e4ec6', '#d6409f'];
-export const AVATAR_PRESETS = ['initial'];
 const DEFAULT_COLOUR = AVATAR_COLOURS[5];
 const INTER_BATCH_DELAY_MS = 75;
 const MAX_NAME_LENGTH = 40;
+const IMPORT_STASH_MS = 15 * 60 * 1000;
 
 export const NATIVE_PROFILES_WARNING =
   'Your Stremio account has its own profiles (a Supporter feature). OpenProfiles would swap the library ' +
@@ -48,6 +50,7 @@ export class ProfilesService {
     this.now = now;
     this.selfAddon = selfAddon;
     this.lock = new Mutex();
+    this.importStash = new Map();
   }
 
   prepareAddons(addons) {
@@ -216,10 +219,13 @@ export class ProfilesService {
     this.repo.renameProfile(id, clean);
   }
 
-  setAvatar(id, colour) {
-    this.requireProfile(id);
+  /** `picture` is an avatar preset (see addon/avatars.js); omitted keeps the current one. */
+  setAvatar(id, colour, picture) {
+    const profile = this.requireProfile(id);
     this.validateColour(colour);
-    this.repo.setProfileAvatar(id, 'initial', colour);
+    const preset = picture ?? profile.avatar_preset;
+    if (!isValidAvatar(preset)) throw new UserError('BAD_INPUT', 'Pick one of the listed pictures.');
+    this.repo.setProfileAvatar(id, preset, colour);
   }
 
   deleteProfile(id) {
@@ -496,6 +502,77 @@ export class ProfilesService {
       addons,
       notifs,
     };
+  }
+
+  // ── import from StremShare ───────────────────────────────────────────────
+
+  /**
+   * Validate an uploaded StremShare backup and hold it briefly for the
+   * confirm step, so the (possibly large) file is only sent once.
+   */
+  previewImport(raw) {
+    const account = this.requireAccount();
+    const parsed = parseStremShareBackup(raw);
+    const id = randomToken(12);
+    const now = this.now();
+    for (const [key, entry] of this.importStash) if (entry.expiresAt <= now) this.importStash.delete(key);
+    while (this.importStash.size >= 3) this.importStash.delete(this.importStash.keys().next().value);
+    this.importStash.set(id, { parsed, expiresAt: now + IMPORT_STASH_MS });
+    const { library, addons, notifs } = parsed.snapshot;
+    return {
+      id,
+      label: parsed.label,
+      kind: parsed.kind,
+      createdAt: parsed.createdAt,
+      counts: { library: countActive(library), addons: addons.length, notifs: notifs.length },
+      sameAccount: sameAccount(parsed, account),
+      sourceEmail: parsed.sourceEmail,
+      suggestedName: suggestedProfileName(parsed.label),
+    };
+  }
+
+  /**
+   * Save a previewed file as a backup, and (`asProfile`) also as a new
+   * profile. Nothing is written to Stremio: switch to the profile, or restore
+   * the backup, to apply it.
+   */
+  confirmImport(id, { asProfile = true, name, colour = DEFAULT_COLOUR, acceptOtherAccount = false } = {}) {
+    return this.lock.run(async () => {
+      const account = this.requireAccount();
+      const entry = this.importStash.get(id);
+      if (!entry || entry.expiresAt <= this.now()) {
+        throw new UserError('IMPORT_EXPIRED', 'That upload has expired. Choose the file again.');
+      }
+      const { parsed } = entry;
+      if (sameAccount(parsed, account) !== true && !acceptOtherAccount) {
+        throw new UserError('OTHER_ACCOUNT', "This backup may be from a different Stremio account. Tick the box to confirm you want it anyway.");
+      }
+      const snapshot = { ...parsed.snapshot, library: scrubTombstones(parsed.snapshot.library) };
+      let profile = null;
+      let clean = null;
+      if (asProfile) {
+        clean = this.validateName(name ?? suggestedProfileName(parsed.label));
+        this.assertNameFree(clean);
+        this.validateColour(colour);
+      }
+      const backupId = this.repo.transaction(() => {
+        const bid = this.repo.insertBackup({
+          kind: 'imported',
+          label: `From StremShare: ${parsed.label ?? 'backup'}`,
+          stremioUserId: account.stremio_user_id,
+          snapshot,
+        });
+        if (asProfile) {
+          const pid = this.repo.insertProfile({ name: clean, avatarPreset: 'initial', avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot });
+          profile = this.repo.getProfile(pid);
+        }
+        return bid;
+      });
+      this.importStash.delete(id);
+      this.repo.pruneBackups();
+      this.log.info('StremShare backup imported', { backupId, profileId: profile?.id ?? null });
+      return { profile, backup: this.repo.getBackup(backupId) };
+    });
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────

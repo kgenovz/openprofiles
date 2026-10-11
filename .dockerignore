@@ -1,0 +1,12 @@
+node_modules
+data
+data-dev
+art-preview
+test
+scripts
+.git
+.github
+.claude
+*.md
+!README.md
+.env

@@ -126,6 +126,19 @@ describe('web', () => {
     assert.equal(JSON.parse(res.text).format, 'openprofiles-backup');
   });
 
+  it('import preview needs the CSRF header and answers bad files with a message', async () => {
+    const b = new Browser(base);
+    await b.signIn();
+    const noToken = await fetch(`${base}/import/preview`, { method: 'POST', headers: { cookie: b.cookie }, body: '{}' });
+    assert.equal(noToken.status, 403);
+    const csrf = await b.csrf();
+    const bad = await fetch(`${base}/import/preview`, {
+      method: 'POST', headers: { cookie: b.cookie, 'x-csrf-token': csrf, 'content-type': 'application/json' }, body: 'not json',
+    });
+    assert.equal(bad.status, 400);
+    assert.match((await bad.json()).error, /valid JSON/);
+  });
+
   it('rate-limits repeated wrong passwords', async () => {
     const b = new Browser(base);
     let last;

@@ -3,7 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAddonRouter } from '../addon/routes.js';
-import { userMessageOf } from '../core/service.js';
+import { avatarTileSvg } from '../addon/art.js';
+import { isValidAvatar } from '../addon/avatars.js';
+import { AVATAR_COLOURS, userMessageOf } from '../core/service.js';
 import { createAuth } from './auth.js';
 import { dashboardPage, errorPage, loginPage, restorePreviewPage, setupPage } from './views.js';
 
@@ -135,9 +137,28 @@ export function createApp({ config, db, service, log }) {
   }));
 
   r.post('/profiles/:id/avatar', action(async (req) => {
-    service.setAvatar(idParam(req), req.body.colour);
-    return { text: 'Colour saved.' };
+    service.setAvatar(idParam(req), req.body.colour, req.body.picture);
+    return { text: 'Picture saved.' };
   }));
+
+  // Picture tiles for the page (banners and the picker). SVG via <img>, so nothing in them runs.
+  const sendSvg = (res, svg) => res
+    .set('Cache-Control', 'private, max-age=86400')
+    .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
+    .type('image/svg+xml')
+    .send(svg);
+
+  r.get('/avatars/profile/:id.svg', (req, res) => {
+    const p = service.repo.getProfile(idParam(req));
+    if (!p) return res.status(404).end();
+    return sendSvg(res, avatarTileSvg({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset }));
+  });
+
+  r.get('/avatars/preview.svg', (req, res) => {
+    const { avatar = 'initial', colour = AVATAR_COLOURS[5], name = '' } = req.query;
+    if (!isValidAvatar(avatar) || !AVATAR_COLOURS.includes(colour)) return res.status(400).end();
+    return sendSvg(res, avatarTileSvg({ name: String(name).slice(0, 40), colour, avatar, size: 128 }));
+  });
 
   r.post('/profiles/:id/delete', action(async (req) => {
     await service.deleteProfile(idParam(req));
@@ -157,6 +178,36 @@ export function createApp({ config, db, service, log }) {
   r.post('/backups', action(async (req) => {
     const b = await service.createBackup(req.body.label);
     return { text: `Backed up (${b.library_count} titles, ${b.addon_count} add-ons).` };
+  }));
+
+  // Step 1 of an import: the page's script uploads the file and gets a summary back.
+  r.post('/import/preview', express.text({ type: '*/*', limit: '64mb' }), (req, res) => {
+    let raw;
+    try {
+      raw = JSON.parse(req.body);
+    } catch {
+      return res.status(400).json({ error: "That file isn't valid JSON, so it can't be a StremShare backup." });
+    }
+    try {
+      return res.json(service.previewImport(raw));
+    } catch (err) {
+      if (!err.userMessage) log.error('Import preview failed', { error: err.message });
+      return res.status(400).json({ error: userMessageOf(err) });
+    }
+  });
+
+  r.post('/import/confirm', action(async (req) => {
+    const asProfile = req.body.as !== 'backup';
+    const { profile } = await service.confirmImport(String(req.body.id || ''), {
+      asProfile,
+      name: req.body.name,
+      acceptOtherAccount: req.body.acceptOtherAccount === '1',
+    });
+    return {
+      text: profile
+        ? `Imported as the profile "${profile.name}" (and kept as a backup). Switch to it to load it into Stremio.`
+        : 'Imported as a backup. Restore it from the Backups list to load it into Stremio.',
+    };
   }));
 
   r.get('/backups/:id/restore', (req, res) => {
@@ -193,8 +244,8 @@ export function createApp({ config, db, service, log }) {
   app.use(r);
 
   app.use((req, res) => sendPage(res, errorPage({ status: 404, message: "There's nothing here." }), 404));
-  // eslint-disable-next-line no-unused-vars
-  app.use((err, req, res, next) => {
+  // Four parameters is how Express recognises an error handler.
+  app.use((err, req, res, _next) => {
     log.error('Request failed', { path: req.path, error: err.message, stack: err.stack });
     const status = err.status && err.status < 500 ? err.status : 500;
     sendPage(res, errorPage({ status, message: status === 500 ? 'The server log has details.' : 'That request was not valid.' }), status);
