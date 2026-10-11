@@ -3,7 +3,7 @@ import { silentLogger } from '../log.js';
 import { GuardError, MAX_ADDONS, MAX_LIBRARY_ITEMS, decodeSnapshot } from './guard.js';
 import { parseStremShareBackup, sameAccount, suggestedProfileName } from './importer.js';
 import {
-  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, hasId, scrubTombstones,
+  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, hasId,
 } from './library.js';
 import { Mutex } from './lock.js';
 import { isValidAvatar } from '../addon/avatars.js';
@@ -547,7 +547,7 @@ export class ProfilesService {
       if (sameAccount(parsed, account) !== true && !acceptOtherAccount) {
         throw new UserError('OTHER_ACCOUNT', "This backup may be from a different Stremio account. Tick the box to confirm you want it anyway.");
       }
-      const snapshot = { ...parsed.snapshot, library: scrubTombstones(parsed.snapshot.library) };
+      const { snapshot } = parsed;
       let profile = null;
       let clean = null;
       if (asProfile) {
@@ -639,8 +639,9 @@ export class ProfilesService {
     }
   }
 
+  /** Snapshots are stored exactly as Stremio returned them. Never clean them up: see isCleanTombstone. */
   capture(live) {
-    return { library: scrubTombstones(live.library), addons: live.addons, notifs: live.notifs };
+    return { library: live.library, addons: live.addons, notifs: live.notifs };
   }
 
   validateName(name) {

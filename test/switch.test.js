@@ -88,6 +88,29 @@ describe('switchTo', () => {
     assert.equal(restoredNotif.dismissed, false);
   });
 
+  it('keeps Continue Watching for things played without adding them to the library', async () => {
+    const { service, repo, cipher, fake, kids, original } = await linkedWithKids();
+    // How Stremio stores a show you played from Discover: removed + temp, with progress.
+    const got = libItem('tt0944947', { name: 'Game of Thrones', removed: true, temp: true, timeOffset: 1_800_000, lastWatched: '2026-10-09T19:54:37.947666Z' });
+    got.state.watched = 'tt0944947:1:3:eJxjYGBgAAAABAAB';
+    fake.seed({ library: [got] });
+    const before = structuredClone(fake.library.get('tt0944947'));
+
+    await service.switchTo(kids.id);
+    const hidden = fake.library.get('tt0944947');
+    assert.equal(hidden.temp, false, 'hidden from Kids');
+    assert.equal(hidden.state.timeOffset, 0);
+
+    const saved = cipher.decryptJson(repo.getProfileRow(original.id).library_enc, 'library').find((i) => i._id === 'tt0944947');
+    assert.deepEqual(saved, before, 'the outgoing snapshot keeps it exactly as Stremio had it');
+
+    await service.switchTo(original.id);
+    const back = fake.library.get('tt0944947');
+    assert.equal(back.removed, true);
+    assert.equal(back.temp, true);
+    assert.deepEqual(back.state, before.state, 'progress and watched episodes come back');
+  });
+
   it('things added in Kids stay in Kids', async () => {
     const { service, repo, fake, kids, original } = await linkedWithKids();
     await service.switchTo(kids.id);

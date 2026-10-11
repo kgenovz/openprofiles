@@ -36,9 +36,14 @@ export function countActive(items) {
 }
 
 /**
- * A tombstone with nothing left that could put it back on the home screen.
- * Continue Watching filters on `temp` and reads `lastWatched`/`video_id`
- * even for removed items, so `removed: true` alone is not enough.
+ * A tombstone with nothing left in it: removed, not temp, no progress and no
+ * watched episodes. Only these are safe to treat as "nothing here".
+ *
+ * `removed: true` alone does NOT mean deleted. Stremio stores everything you
+ * play without adding it to your library as `removed: true, temp: true`, with
+ * real progress, and shows it in Continue Watching
+ * (stremio-core: `(!removed || temp) && time_offset > 0`). A removed show can
+ * also still carry its watched-episode marks in `state.watched`.
  */
 export function isCleanTombstone(item) {
   if (!hasId(item) || item.removed !== true || item.temp === true) return false;
@@ -60,19 +65,6 @@ export function tombstone(item, mtimeIso) {
   };
 }
 
-/**
- * Capture-side scrub. Stremio's notification worker keeps updating
- * `lastWatched`/`video_id` on tombstoned items; saving that into a snapshot
- * makes removed shows creep back into Continue Watching after a few switches.
- * Active items are left exactly as Stremio returned them.
- */
-export function scrubTombstones(items) {
-  return items.map((it) => {
-    if (!hasId(it) || it.removed !== true || isCleanTombstone(it)) return it;
-    return { ...it, temp: false, state: { ...(it.state || {}), ...ZEROED_STATE } };
-  });
-}
-
 function recency(item) {
   for (const value of [item.state?.lastWatched, item._mtime]) {
     if (value) {
@@ -90,7 +82,8 @@ function recency(item) {
  *   - Target items are pushed verbatim (state, temp, removed kept) with
  *     unique `_mtime`s descending by recency: the home Continue Watching row
  *     sorts by `_mtime`, and identical values scramble it.
- *   - Target tombstones over an already-clean live tombstone are skipped.
+ *   - A target item that is a clean tombstone over a live clean tombstone is
+ *     skipped (same nothing, re-written).
  * `_mtime` must be an RFC 3339 string; an integer is rejected with a 400.
  */
 export function buildLibraryChanges(live, target, now = Date.now()) {
@@ -113,7 +106,7 @@ export function buildLibraryChanges(live, target, now = Date.now()) {
   }
 
   const ordered = targets
-    .filter((it) => !(it.removed === true && isCleanTombstone(liveById.get(it._id))))
+    .filter((it) => !(isCleanTombstone(it) && isCleanTombstone(liveById.get(it._id))))
     .sort((a, b) => recency(b) - recency(a));
   stats.unchanged += targets.length - ordered.length;
   ordered.forEach((item, i) => {

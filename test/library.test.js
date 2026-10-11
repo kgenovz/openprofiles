@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  buildLibraryChanges, buildNotifChanges, countActive, isCleanTombstone, scrubTombstones, tombstone,
+  buildLibraryChanges, buildNotifChanges, countActive, isCleanTombstone, tombstone,
 } from '../src/core/library.js';
 import { libItem, notif } from './helpers/fakeStremio.js';
 
@@ -76,14 +76,36 @@ describe('buildLibraryChanges', () => {
   });
 });
 
-describe('scrubTombstones', () => {
-  it('cleans tombstones and leaves active items untouched', () => {
-    const active = libItem('a', { temp: true, timeOffset: 10, lastWatched: '2026-10-01T00:00:00.000Z' });
-    const polluted = { ...libItem('b', { lastWatched: '2026-10-01T00:00:00.000Z', timeOffset: 10 }), removed: true, temp: true };
-    const [a, b] = scrubTombstones([active, polluted]);
-    assert.equal(a, active, 'same object, not a copy');
-    assert.equal(isCleanTombstone(b), true);
-    assert.equal(countActive([a, b]), 1);
+// Regression: the first live test lost Continue Watching for everything played
+// without being added to the library, because removed items were "cleaned".
+describe('removed is not the same as deleted', () => {
+  const playedNotInLibrary = () => libItem('tt-got', {
+    removed: true, temp: true, timeOffset: 1_234_000, lastWatched: '2026-10-09T19:54:37.947666Z',
+  });
+  const removedWithWatchedEpisodes = () => {
+    const it = libItem('tt-old-show', { removed: true });
+    it.state.watched = 'tt-old-show:8:1:eJxjYGBgAAAABAAB';
+    return it;
+  };
+
+  it('a played-but-not-in-library item is live data, not a tombstone', () => {
+    assert.equal(isCleanTombstone(playedNotInLibrary()), false);
+    assert.equal(isCleanTombstone(removedWithWatchedEpisodes()), false);
+  });
+
+  it('is pushed back verbatim even when the live copy is a clean tombstone', () => {
+    const target = [playedNotInLibrary(), removedWithWatchedEpisodes()];
+    const live = target.map((it) => tombstone(it, '2026-10-11T00:00:00.000Z'));
+    const { changes } = buildLibraryChanges(live, target, NOW);
+    const got = changes.find((c) => c._id === 'tt-got');
+    assert.equal(got.temp, true);
+    assert.equal(got.state.timeOffset, 1_234_000);
+    assert.equal(got.state.lastWatched, '2026-10-09T19:54:37.947666Z');
+    assert.equal(changes.find((c) => c._id === 'tt-old-show').state.watched, 'tt-old-show:8:1:eJxjYGBgAAAABAAB');
+  });
+
+  it('countActive counts only items in the library', () => {
+    assert.equal(countActive([libItem('a'), playedNotInLibrary(), removedWithWatchedEpisodes()]), 1);
   });
 });
 

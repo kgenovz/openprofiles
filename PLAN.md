@@ -76,9 +76,14 @@ One switch at a time (process-wide mutex; single tenant). Steps:
    ("couldn't read"), not `[]`.
 6. **Journal `started`** and take a `pre_switch` backup of the live state. If it fails, abort.
 7. **Save the outgoing profile** (library + add-ons + notifications in one transaction; keep the
-   old notification blob if the read failed). Capture-side scrub: zero the resume fields on
-   every `removed:true` item (Stremio's notification worker re-pollutes tombstones and they
-   creep back into Continue Watching after a few switches).
+   old notification blob if the read failed). Store items **verbatim**.
+   ~~Capture-side scrub: zero the resume fields on every `removed:true` item.~~ **Wrong, removed
+   2026-10-11 after it wiped Continue Watching in the first live test.** `removed: true` is not
+   "deleted": anything played without being added to the library is stored as
+   `removed: true, temp: true` with real progress, and Continue Watching shows
+   `(!removed || temp) && timeOffset > 0`. Removed shows also keep watched-episode marks in
+   `state.watched`. The "pollution" StremShare saw was this data. Only an item that is removed,
+   not temp, and has no progress or watched marks counts as a clean tombstone.
 8. **Write the library** (diff-based full replace via `datastorePut changes:[…]`, chunks of 150,
    75 ms apart; upserts by `_id`, so retries are safe):
    - Items live now but missing from the target are tombstoned with the FULL original item
