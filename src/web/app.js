@@ -1,11 +1,16 @@
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { createAddonRouter } from '../addon/routes.js';
 import { userMessageOf } from '../core/service.js';
 import { createAuth } from './auth.js';
 import { dashboardPage, errorPage, loginPage, restorePreviewPage, setupPage } from './views.js';
 
-const STATIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'static');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const STATIC_DIR = path.join(HERE, 'static');
+const CLIPS_DIR = path.join(HERE, '..', '..', 'assets', 'clips');
+const FONTS_DIR = path.dirname(createRequire(import.meta.url).resolve('@fontsource/figtree/package.json'));
 
 function securityHeaders(req, res, next) {
   res.setHeader('Content-Security-Policy',
@@ -29,6 +34,11 @@ export function createApp({ config, db, service, log }) {
   app.disable('x-powered-by');
   app.use(securityHeaders);
   app.use('/static', express.static(STATIC_DIR, { maxAge: '1h', index: false }));
+  app.use('/fonts', express.static(FONTS_DIR, { maxAge: '30d', index: false, extensions: false }));
+  app.use('/clips', (req, res, next) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    next();
+  }, express.static(CLIPS_DIR, { maxAge: '7d', index: false }));
   app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
   const sendPage = (res, page, status = 200) => {
@@ -59,6 +69,9 @@ export function createApp({ config, db, service, log }) {
     return sendPage(res, loginPage({ error }), outcome === 'limited' ? 429 : 401);
   });
 
+  // Stremio-facing routes, guarded by the add-on token rather than the admin login.
+  app.use(createAddonRouter({ config, service, log }));
+
   const r = express.Router();
   r.use(auth.require, auth.csrf);
 
@@ -73,9 +86,18 @@ export function createApp({ config, db, service, log }) {
     const { csrf } = req.session;
     if (!status.linked) return sendPage(res, setupPage({ csrf, flash }));
     return sendPage(res, dashboardPage({
-      csrf, flash, status, backups: service.listBackups(), journal: service.recentActivity(10),
+      csrf, flash, status, backups: service.listBackups(), journal: service.recentActivity(10), addon: service.addonInfo(),
     }));
   });
+
+  r.post('/addon/rotate', action(async () => {
+    const info = await service.rotateAddonToken();
+    return {
+      text: info.installed
+        ? 'New add-on link made. The copy installed in Stremio was updated; the old link no longer works.'
+        : 'New add-on link made. The old link no longer works.',
+    };
+  }));
 
   r.post('/account/link', action(async (req) => {
     const { created, warnings } = await service.linkAccount(String(req.body.email || '').trim(), String(req.body.password || ''));
@@ -142,7 +164,7 @@ export function createApp({ config, db, service, log }) {
     if (!backup) return sendPage(res, errorPage({ status: 404, message: 'That backup no longer exists.' }), 404);
     const status = service.status();
     const active = status.profiles.find((p) => p.id === status.activeProfileId) || null;
-    return sendPage(res, restorePreviewPage({ csrf: req.session.csrf, backup, active, locked: Boolean(status.openJournal) }));
+    return sendPage(res, restorePreviewPage({ csrf: req.session.csrf, backup, active, locked: Boolean(status.openJournal), account: status.account }));
   });
 
   r.post('/backups/:id/restore', action(async (req) => {

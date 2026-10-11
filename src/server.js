@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createSelfAddon } from './addon/manifest.js';
 import { ConfigError, loadConfig } from './config.js';
 import { Cipher, loadOrCreateKey } from './crypto.js';
 import { openDatabase } from './db.js';
@@ -28,7 +29,7 @@ function main() {
   const db = openDatabase(config.dataDir);
   const repo = new Repo(db, cipher);
   const stremio = new StremioClient({ baseUrl: config.stremioApiUrl, log });
-  const service = new ProfilesService({ repo, stremio, log });
+  const service = new ProfilesService({ repo, stremio, log, selfAddon: createSelfAddon(config) });
 
   const open = repo.getOpenJournal();
   if (open) log.warn('An earlier switch did not finish; resolve it on the web page', { journalId: open.id, kind: open.kind });

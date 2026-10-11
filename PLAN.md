@@ -184,6 +184,21 @@ transport URLs.
    - `scripts/dev-stremio.js` serves the test fake over HTTP for trying the web page locally.
 2. **M2 in-Stremio switcher:** manifest/catalog/meta/stream, PNG posters, clips, self-insert of
    the Profiles add-on into every profile's add-on list.
+   *Built 2026-10-10, not yet tried in a real Stremio client.* Design canvas (posters, Home row,
+   phone flow, clips, settings page): https://claude.ai/artifact/MM5EADPs5PtpRcSscSGoNB.
+   Decisions made while building:
+   - Catalog type `OpenProfiles`, so the Home row reads "Switch profile - OpenProfiles".
+     Meta ids are `openprofiles:<id>`.
+   - Posters are drawn from bundled Figtree glyph paths (opentype.js) and rasterised with
+     sharp, so they don't depend on the container's fonts. Names the font can't draw get a
+     person glyph. Avatar colours were darkened so white text passes contrast; migration 2
+     remaps existing profiles.
+   - Opening a profile's page in Stremio requests its stream, so opening it switches. The
+     stream text is written for that ("Switched to Kids").
+   - The stream handler waits up to 25 s for the switch, then answers "still switching" and
+     lets it finish in the background.
+   - "Get a new link" repoints the installed add-on in the account before changing the token.
+   - Clips are made by `scripts/make-clips.js` (ffmpeg-static, dev only) and committed.
 3. **M3 ship:** StremShare import, Docker image on GHCR, README (setup, Supporter warning,
    "switching rewrites the library on every device", backup/restore, recovery), MIT license,
    CI (lint + tests). Live test on a burner Stremio account across desktop, Android, TV.

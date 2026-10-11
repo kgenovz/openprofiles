@@ -75,6 +75,19 @@ const MIGRATIONS = [
     expires_at INTEGER NOT NULL
   );
   `,
+  // M2: remember whether the add-on is installed (as of the last read of the
+  // account's add-ons), and move to the darker avatar colours that keep white
+  // poster text readable.
+  `
+  ALTER TABLE state ADD COLUMN addon_installed INTEGER;
+  UPDATE profiles SET avatar_colour = CASE avatar_colour
+    WHEN '#f76b15' THEN '#e05d0c'
+    WHEN '#e2a336' THEN '#b7790b'
+    WHEN '#46a758' THEN '#3b8f4b'
+    WHEN '#12a594' THEN '#0f8f80'
+    WHEN '#0090ff' THEN '#0a7fe0'
+    ELSE avatar_colour END;
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

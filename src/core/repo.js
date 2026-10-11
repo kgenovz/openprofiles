@@ -75,6 +75,10 @@ export class Repo {
     this.db.prepare('UPDATE state SET addon_token = ? WHERE id = 1').run(token);
   }
 
+  setAddonInstalled(installed) {
+    this.db.prepare('UPDATE state SET addon_installed = ? WHERE id = 1').run(installed ? 1 : 0);
+  }
+
   // ── profiles ─────────────────────────────────────────────────────────────
 
   listProfiles() {

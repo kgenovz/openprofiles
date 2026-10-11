@@ -1,0 +1,204 @@
+import assert from 'node:assert/strict';
+import { after, before, beforeEach, describe, it } from 'node:test';
+import express from 'express';
+import sharp from 'sharp';
+import { createAddonRouter } from '../src/addon/routes.js';
+import { posterSvg, renderPoster } from '../src/addon/art.js';
+import {
+  ADDON_ID, CATALOG_TYPE, buildManifest, ensureSelfAddon, isSelfAddon, parseProfileMetaId,
+} from '../src/addon/manifest.js';
+import { silentLogger } from '../src/log.js';
+import { createApp } from '../src/web/app.js';
+import { addon } from './helpers/fakeStremio.js';
+import { PUBLIC_URL, linkedWithKids, makeService, seededFake } from './helpers/setup.js';
+
+describe('manifest', () => {
+  it('declares exactly one meta resource, with the profile id prefix', () => {
+    const m = buildManifest({ publicUrl: PUBLIC_URL });
+    const metas = m.resources.filter((r) => (typeof r === 'string' ? r : r.name) === 'meta');
+    assert.equal(metas.length, 1);
+    assert.deepEqual(metas[0].idPrefixes, ['openprofiles:']);
+    assert.ok(m.types.includes(CATALOG_TYPE), 'the catalog type is listed in types[]');
+    assert.equal(m.catalogs[0].name, 'Switch profile');
+  });
+
+  it('ensureSelfAddon appends when missing and repoints in place when present', () => {
+    const desc = { transportUrl: 'https://new/manifest.json', transportName: '', manifest: { id: ADDON_ID, v: 2 }, flags: {} };
+    const appended = ensureSelfAddon([addon('cinemeta')], desc);
+    assert.equal(appended.length, 2);
+    assert.equal(appended[1], desc);
+
+    const old = { transportUrl: 'https://old/manifest.json', manifest: { id: ADDON_ID, v: 1 }, flags: { keep: true } };
+    const repointed = ensureSelfAddon([old, addon('cinemeta')], desc);
+    assert.equal(repointed[0].transportUrl, 'https://new/manifest.json', 'keeps its position');
+    assert.deepEqual(repointed[0].flags, { keep: true });
+    assert.equal(repointed[0].manifest.v, 2);
+  });
+
+  it('parses only well-formed profile ids', () => {
+    assert.equal(parseProfileMetaId('openprofiles:12'), 12);
+    for (const bad of ['openprofiles:', 'openprofiles:x', 'tt123', 'openprofiles:-1', 'openprofiles:1.5']) {
+      assert.equal(parseProfileMetaId(bad), null, bad);
+    }
+  });
+});
+
+describe('switching keeps OpenProfiles installed', () => {
+  it('inserts the add-on into a profile saved without it', async () => {
+    const { service, fake, kids, repo } = await linkedWithKids({ withAddon: true });
+    assert.ok(!fake.addons.some(isSelfAddon));
+    await service.switchTo(kids.id);
+    const self = fake.addons.find(isSelfAddon);
+    assert.ok(self, 'the switcher row survives the switch');
+    assert.equal(self.transportUrl, `${PUBLIC_URL}/${repo.getState().addon_token}/manifest.json`);
+    assert.equal(repo.getState().addon_installed, 1);
+  });
+
+  it('rotating the link repoints the installed copy before the old token stops working', async () => {
+    const { service, fake, repo } = await linkedWithKids({ withAddon: true });
+    const oldToken = repo.getState().addon_token;
+    fake.addons.push(service.selfAddon.descriptor(oldToken));
+    const info = await service.rotateAddonToken();
+    const newToken = repo.getState().addon_token;
+    assert.notEqual(newToken, oldToken);
+    assert.equal(info.installed, true);
+    assert.equal(fake.addons.find(isSelfAddon).transportUrl, `${PUBLIC_URL}/${newToken}/manifest.json`);
+  });
+
+  it('a failed repoint keeps the old token', async () => {
+    const { service, fake, repo } = await linkedWithKids({ withAddon: true });
+    const oldToken = repo.getState().addon_token;
+    fake.addons.push(service.selfAddon.descriptor(oldToken));
+    fake.failWhen((m) => m === 'addonCollectionSet', { error: { code: 99, message: 'nope' } });
+    await assert.rejects(service.rotateAddonToken());
+    assert.equal(repo.getState().addon_token, oldToken);
+  });
+});
+
+describe('poster art', () => {
+  it('renders a 512 px square PNG', async () => {
+    const png = await renderPoster({ name: 'Kids', colour: '#d6409f', active: true });
+    const meta = await sharp(png).metadata();
+    assert.deepEqual([meta.format, meta.width, meta.height], ['png', 512, 512]);
+  });
+
+  it('marks the active profile and handles names the font cannot draw', () => {
+    assert.match(posterSvg({ name: 'Kids', colour: '#d6409f', active: true }), /#14141a/, 'check badge');
+    assert.doesNotMatch(posterSvg({ name: 'Kids', colour: '#d6409f', active: false }), /#14141a/);
+    assert.doesNotThrow(() => posterSvg({ name: '映画', colour: '#3b8f4b', active: false }));
+    assert.doesNotThrow(() => posterSvg({ name: '', colour: '#3b8f4b', active: false }));
+  });
+});
+
+describe('add-on routes', () => {
+  let server;
+  let base;
+  let ctx;
+  let token;
+
+  before(async () => {
+    ctx = makeService({ fake: seededFake(), withAddon: true });
+    await ctx.service.linkAccount('kyle@example.com', 'hunter22');
+    ctx.kids = await ctx.service.createProfile({ name: 'Kids', from: 'empty' });
+    const config = { publicUrl: PUBLIC_URL, adminPassword: 'x'.repeat(12), trustProxy: false };
+    server = createApp({ config, db: ctx.db, service: ctx.service, log: silentLogger }).listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  after(() => server.close());
+
+  beforeEach(() => {
+    token = ctx.repo.getState().addon_token;
+  });
+
+  const get = async (path) => {
+    const res = await fetch(base + path, { redirect: 'manual' });
+    const type = res.headers.get('content-type') || '';
+    return { res, body: type.includes('json') ? await res.json() : null };
+  };
+
+  it('serves the manifest with CORS and no caching', async () => {
+    const { res, body } = await get(`/${token}/manifest.json`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.equal(body.id, ADDON_ID);
+  });
+
+  it('answers 404 for a wrong token', async () => {
+    for (const path of ['/wrong/manifest.json', `/wrong/catalog/${CATALOG_TYPE}/openprofiles.json`, '/wrong/stream/x/openprofiles:1.json']) {
+      assert.equal((await get(path)).res.status, 404, path);
+    }
+  });
+
+  it('lists every profile with a versioned square poster, active one marked', async () => {
+    const { body } = await get(`/${token}/catalog/${CATALOG_TYPE}/openprofiles.json`);
+    assert.deepEqual(body.metas.map((m) => m.name), ['Original', 'Kids']);
+    assert.ok(body.metas.every((m) => m.posterShape === 'square' && /\.png\?v=/.test(m.poster)));
+    assert.match(body.metas[0].description, /in use/);
+    const other = await get(`/${token}/catalog/movie/top.json`);
+    assert.deepEqual(other.body, { metas: [] });
+  });
+
+  it('meta echoes the requested type and 404s unknown ids', async () => {
+    const { body } = await get(`/${token}/meta/other/openprofiles:${ctx.kids.id}.json`);
+    assert.equal(body.meta.type, 'other');
+    assert.equal(body.meta.behaviorHints.defaultVideoId, `openprofiles:${ctx.kids.id}`);
+    assert.equal((await get(`/${token}/meta/${CATALOG_TYPE}/openprofiles:999.json`)).res.status, 404);
+  });
+
+  it('the stream request performs the switch, and repeating it is harmless', async () => {
+    const path = `/${token}/stream/${CATALOG_TYPE}/${encodeURIComponent(`openprofiles:${ctx.kids.id}`)}.json`;
+    const first = await get(path);
+    assert.equal(ctx.repo.getState().active_profile_id, ctx.kids.id);
+    const [s] = first.body.streams;
+    assert.match(s.description, /^Switched to Kids/);
+    assert.equal(s.url, `${PUBLIC_URL}/clips/switching.mp4`);
+    assert.equal(s.behaviorHints.notWebReady, true);
+
+    const puts = ctx.fake.calls.length;
+    const again = await get(path);
+    assert.match(again.body.streams[0].description, /^Kids is in use/);
+    assert.equal(ctx.fake.calls.length, puts + 0, 'already active: no Stremio calls');
+  });
+
+  it('errors come back as a stream with the reason first and the error clip', async () => {
+    const original = ctx.repo.listProfiles().find((p) => p.name === 'Original');
+    ctx.fake.failWhen((m) => m === 'getUser', { status: 529 });
+    const { body } = await get(`/${token}/stream/${CATALOG_TYPE}/openprofiles:${original.id}.json`);
+    ctx.fake.rules = [];
+    assert.match(body.streams[0].description, /^Couldn't switch: Stremio is busy/);
+    assert.match(body.streams[0].url, /switch-error\.mp4$/);
+  });
+
+  it('serves posters, the logo and the clips', async () => {
+    const poster = await fetch(`${base}/${token}/poster/${ctx.kids.id}.png`);
+    assert.equal(poster.headers.get('content-type'), 'image/png');
+    assert.equal((await fetch(`${base}/logo.png`)).status, 200);
+    const clip = await fetch(`${base}/clips/switching.mp4`, { headers: { range: 'bytes=0-99' } });
+    assert.equal(clip.status, 206, 'range requests work for players');
+  });
+
+  it('a slow switch answers "still switching" and finishes in the background', async () => {
+    let finish;
+    const slowService = { repo: ctx.repo, switchTo: () => new Promise((resolve) => { finish = resolve; }) };
+    const app = express().use(createAddonRouter({ config: { publicUrl: PUBLIC_URL }, service: slowService, log: silentLogger, waitMs: 20 }));
+    const slow = app.listen(0);
+    await new Promise((resolve) => slow.once('listening', resolve));
+    try {
+      const res = await fetch(`http://127.0.0.1:${slow.address().port}/${token}/stream/${CATALOG_TYPE}/openprofiles:${ctx.kids.id}.json`);
+      const body = await res.json();
+      assert.match(body.streams[0].description, /^Still switching to Kids/);
+      finish({ alreadyActive: false, warnings: [] });
+    } finally {
+      slow.close();
+    }
+  });
+
+  it('the configure button redirects to the settings page', async () => {
+    const { res } = await get(`/${token}/configure`);
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/configure');
+  });
+});

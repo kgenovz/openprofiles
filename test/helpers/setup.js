@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createSelfAddon } from '../../src/addon/manifest.js';
 import { Cipher } from '../../src/crypto.js';
 import { openDatabase } from '../../src/db.js';
 import { Repo } from '../../src/core/repo.js';
@@ -9,14 +10,18 @@ import { FakeStremio, addon, libItem, notif } from './fakeStremio.js';
 export const noSleep = async () => {};
 
 /** A service wired to an in-memory database and a fake Stremio. */
-export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32) } = {}) {
+export const PUBLIC_URL = 'https://profiles.example.com';
+
+/** A service wired to an in-memory database and a fake Stremio. `withAddon` turns on the M2 self-insert. */
+export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32), withAddon = false } = {}) {
   const db = openDatabase(null, { filename: ':memory:' });
   const cipher = new Cipher(key);
   let clock = Date.parse('2026-10-10T12:00:00.000Z');
   const now = () => (clock += 1000);
   const repo = new Repo(db, cipher, now);
   const stremio = new StremioClient({ fetchImpl: fake.fetch, sleep: noSleep });
-  const service = new ProfilesService({ repo, stremio, sleep: noSleep, now });
+  const selfAddon = withAddon ? createSelfAddon({ publicUrl: PUBLIC_URL }) : null;
+  const service = new ProfilesService({ repo, stremio, sleep: noSleep, now, selfAddon });
   return { fake, db, cipher, repo, stremio, service };
 }
 

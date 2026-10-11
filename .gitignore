@@ -6,3 +6,4 @@ data/
 secret.key
 .env
 data-dev/
+art-preview/

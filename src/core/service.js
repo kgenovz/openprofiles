@@ -5,8 +5,10 @@ import {
   LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, hasId, scrubTombstones,
 } from './library.js';
 import { Mutex } from './lock.js';
+import { ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
 
-export const AVATAR_COLOURS = ['#e5484d', '#f76b15', '#e2a336', '#46a758', '#12a594', '#0090ff', '#8e4ec6', '#d6409f'];
+// Each clears 3.5:1 under a white initial (see the poster artboard in the M2 design).
+export const AVATAR_COLOURS = ['#e5484d', '#e05d0c', '#b7790b', '#3b8f4b', '#0f8f80', '#0a7fe0', '#8e4ec6', '#d6409f'];
 export const AVATAR_PRESETS = ['initial'];
 const DEFAULT_COLOUR = AVATAR_COLOURS[5];
 const INTER_BATCH_DELAY_MS = 75;
@@ -37,15 +39,24 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * thin callers.
  */
 export class ProfilesService {
-  constructor({ repo, stremio, log = silentLogger, sleep = realSleep, now = () => Date.now(), prepareAddons = (a) => a }) {
+  /** `selfAddon` (from addon/manifest.js) keeps OpenProfiles installed in every add-on list written. */
+  constructor({ repo, stremio, log = silentLogger, sleep = realSleep, now = () => Date.now(), selfAddon = null }) {
     this.repo = repo;
     this.stremio = stremio;
     this.log = log;
     this.sleep = sleep;
     this.now = now;
-    // Hook for M2: make sure the OpenProfiles add-on itself is in every list we write.
-    this.prepareAddons = prepareAddons;
+    this.selfAddon = selfAddon;
     this.lock = new Mutex();
+  }
+
+  prepareAddons(addons) {
+    if (!this.selfAddon) return addons;
+    return ensureSelfAddon(addons, this.selfAddon.descriptor(this.repo.getState().addon_token));
+  }
+
+  noteAddons(addons) {
+    if (this.selfAddon && this.repo.getState()) this.repo.setAddonInstalled(addons.some(isSelfAddon));
   }
 
   // ── read-only views ──────────────────────────────────────────────────────
@@ -126,8 +137,44 @@ export class ProfilesService {
         this.repo.initState({ activeProfileId: id, addonToken: randomToken() });
         this.repo.insertBackup({ kind: 'original', label: 'Account as it was at setup', stremioUserId: user.id, snapshot });
       });
+      this.noteAddons(live.addons);
       this.log.info('Stremio account linked', { libraryItems: snapshot.library.length, addons: snapshot.addons.length });
       return { created: true, warnings };
+    });
+  }
+
+  // ── the in-Stremio add-on ────────────────────────────────────────────────
+
+  /** Install links and whether the add-on was in the account's list at the last read. */
+  addonInfo() {
+    const state = this.repo.getState();
+    if (!state || !this.selfAddon) return null;
+    const manifestUrl = this.selfAddon.manifestUrl(state.addon_token);
+    return {
+      manifestUrl,
+      installUrl: stremioInstallUrl(manifestUrl),
+      installed: state.addon_installed == null ? null : Boolean(state.addon_installed),
+    };
+  }
+
+  /**
+   * New secret add-on link. If the add-on is installed, the account's copy is
+   * repointed first, so the old link dies without breaking the installed one.
+   */
+  rotateAddonToken() {
+    return this.lock.run(async () => {
+      this.requireAccount();
+      this.assertNoOpenJournal();
+      const { authKey } = await this.session();
+      const token = randomToken();
+      const addons = await this.stremio.getAddons(authKey);
+      if (addons.some(isSelfAddon)) {
+        await this.stremio.setAddons(authKey, ensureSelfAddon(addons, this.selfAddon.descriptor(token)));
+      }
+      this.repo.setAddonToken(token);
+      this.noteAddons(addons);
+      this.log.info('Add-on link rotated');
+      return this.addonInfo();
     });
   }
 
@@ -290,6 +337,7 @@ export class ProfilesService {
     if (JSON.stringify(addons) !== JSON.stringify(live.addons)) {
       try {
         await this.stremio.setAddons(authKey, addons);
+        this.noteAddons(addons);
       } catch (err) {
         warnings.push(`Add-ons weren't swapped: ${userMessageOf(err)}`);
         this.log.warn('Add-on write failed', { journalId, error: err.message });
@@ -497,6 +545,7 @@ export class ProfilesService {
         return null;
       }),
     ]);
+    this.noteAddons(addons);
     return {
       library: library.filter(hasId),
       addons,
