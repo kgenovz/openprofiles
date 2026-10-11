@@ -118,7 +118,7 @@ export function createApp({ config, db, service, log }) {
     const result = await service.switchTo(idParam(req));
     if (result.alreadyActive) return { text: `"${result.profile.name}" is already in use.` };
     return {
-      text: `Switched to "${result.profile.name}". Close and reopen Stremio on each device to see it.`,
+      text: `Switched to "${result.profile.name}". Click back into Stremio and it refreshes (Stremio 5). Other apps: close and reopen them.`,
       details: result.warnings,
     };
   }));
@@ -220,7 +220,7 @@ export function createApp({ config, db, service, log }) {
 
   r.post('/backups/:id/restore', action(async (req) => {
     const { warnings } = await service.restoreBackup(idParam(req));
-    return { text: 'Backup restored. Close and reopen Stremio on each device to see it.', details: warnings };
+    return { text: 'Backup restored. Click back into Stremio and it refreshes (Stremio 5). Other apps: close and reopen them.', details: warnings };
   }));
 
   r.post('/backups/:id/delete', action(async (req) => {

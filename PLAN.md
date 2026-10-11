@@ -132,7 +132,33 @@ compare live item `state.timeOffset` vs the stored one per `_id` and only ever a
   `{ name, description, url: PUBLIC_URL/switching.mp4, behaviorHints:{ notWebReady:true } }`;
   errors return `/switch-error.mp4` with the reason in `description` (put the key line first:
   mobile pickers truncate). Playing the clip is optional; it covers the refresh.
-- Tell the user: "Close and reopen Stremio" (the only refresh that works on every client).
+- ~~Tell the user: "Close and reopen Stremio" (the only refresh that works on every client).~~
+  **Refresh without a restart (2026-10-11):** the success stream carries
+  `externalUrl: PUBLIC_URL/refresh/go?to=auto`, a bare 302 to a `stremio://` deep link (no
+  page renders). Leaving and re-entering the app makes it re-sync. A second stream keeps the
+  clip + "close and reopen" fallback.
+  - Desktop (Stremio 5 runs stremio-web): `PullAddonsFromAPI`, `PullUserFromAPI`,
+    `SyncLibraryWithAPI` and `PullNotifications` fire on mount and on window `focus` only
+    (src/App/App.js). Redirect to `stremio:///` (Home). Current stremio-web has no `/board`
+    route: it shows "page not found". Switching from the settings page needs only a click back
+    into Stremio.
+  - Android (tested on a Galaxy S22): Home re-syncs the library but keeps the old add-ons on
+    Home; `stremio:///library` (or `/addons`) reloads everything once you go back Home, so
+    Android redirects there. Intents (`intent://…package=com.stremio.one`) do nothing. Chained
+    deep links from the page don't fire: the browser runs the next one only when reopened.
+  - Library sync is a two-way merge by `_mtime` (client pushes its newer items back), so the
+    switch's now-stamped writes and tombstones are what make it a switch, not a merge.
+  - Unverified: Android TV, iOS, Stremio 4.
+- **Known limitation, stray new-episode cards (2026-10-11):** stremio-core's Continue Watching
+  (models/continue_watching_preview.rs) includes any library item with entries in the local
+  `NotificationsBucket`, removed or not, sorted by newest episode release. The bucket is
+  device-local (storage key `notifications`; the server `notifItem` collection isn't read) and
+  pruned only when `PullNotifications` actually refetches, throttled to every 6 h
+  (update_notifications.rs), on login, or on dismiss. So the previous profile's shows with new
+  episodes linger in CW for up to 6 h after a switch. Rejected workaround: `behaviorHints.isLive`
+  (or type `tv`) on tombstones hides them (CW skips live items), but it only exists in core 0.65
+  (Oct 2026) and a show re-added from the other profile would keep the flag and become a "live"
+  item. Still to check: how noticeable it is on a profile with a full Continue Watching row.
 - Make our own short clips (no third-party footage). `Cache-Control: no-store` on catalog and
   stream responses.
 

@@ -152,10 +152,14 @@ describe('add-on routes', () => {
     const path = `/${token}/stream/${CATALOG_TYPE}/${encodeURIComponent(`openprofiles:${ctx.kids.id}`)}.json`;
     const first = await get(path);
     assert.equal(ctx.repo.getState().active_profile_id, ctx.kids.id);
-    const [s] = first.body.streams;
-    assert.match(s.description, /^Switched to Kids/);
-    assert.equal(s.url, `${PUBLIC_URL}/clips/switching.mp4`);
-    assert.equal(s.behaviorHints.notWebReady, true);
+    for (const s of first.body.streams) {
+      assert.equal(s.title, undefined, 'stremio-core treats title as description: both = duplicate field = "No streams were found"');
+    }
+    const [refresh, clip] = first.body.streams;
+    assert.match(refresh.description, /^Switched to Kids/);
+    assert.equal(refresh.externalUrl, `${PUBLIC_URL}/refresh/go?to=auto`, 'tapping it bounces Stremio out and back so it re-syncs');
+    assert.equal(clip.url, `${PUBLIC_URL}/clips/switching.mp4`);
+    assert.equal(clip.behaviorHints.notWebReady, true);
 
     const puts = ctx.fake.calls.length;
     const again = await get(path);
@@ -194,6 +198,23 @@ describe('add-on routes', () => {
     } finally {
       slow.close();
     }
+  });
+
+  it('the refresh redirect sends Android to Library and everything else Home, and nowhere else', async () => {
+    const go = async (query, ua) => {
+      const res = await fetch(`${base}/refresh/go?${query}`, { redirect: 'manual', headers: ua ? { 'user-agent': ua } : {} });
+      assert.equal(res.status, 302);
+      return res.headers.get('location');
+    };
+    const android = 'Mozilla/5.0 (Linux; Android 15; SM-S901W) AppleWebKit/537.36 Chrome/141.0 Mobile Safari/537.36';
+    const windows = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36';
+    assert.equal(await go('to=auto', android), 'stremio:///library');
+    assert.equal(await go('to=auto', windows), 'stremio:///', 'Home is "/": /board is "page not found" in current Stremio');
+    assert.equal(await go('to=library'), 'stremio:///library');
+    assert.equal(await go('to=https%3A%2F%2Fevil.example'), 'stremio:///', 'unknown targets fall back to Home');
+    const body = await (await fetch(`${base}/refresh/go?to=library`, { redirect: 'manual' })).text();
+    assert.doesNotMatch(body, /Redirecting/, 'no "Found. Redirecting to…" flash in the browser tab');
+    assert.match(body, /href="stremio:\/\/\/library"/);
   });
 
   it('the configure button redirects to the settings page', async () => {

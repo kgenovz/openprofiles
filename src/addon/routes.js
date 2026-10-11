@@ -13,6 +13,32 @@ const SWITCH_WAIT_MS = 25_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 
+/**
+ * Where the refresh redirect sends each device. Found by testing on real apps
+ * (2026-10-11):
+ *   - Desktop (Stremio 5): any deep link brings the window to the front, and
+ *     focus re-syncs library and add-ons (stremio-web App.js), so go Home.
+ *   - Android: Home ("/") re-syncs the library but keeps the old add-ons on
+ *     Home; Library (or Add-ons) reloads everything once you go back Home.
+ *     Intents do nothing, and chained deep links don't fire (the browser only
+ *     follows the next one when it's reopened).
+ */
+export function autoRefreshTarget(userAgent = '') {
+  return /Android/i.test(userAgent) ? 'library' : 'home';
+}
+
+/** What the browser tab shows for a moment during the hand-off. `target` is one of REDIRECT_TARGETS. */
+function handoffPage(target) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>OpenProfiles</title></head>
+<body style="margin:0;min-height:100vh;background:#0f0f14">
+<a href="${target}" style="position:fixed;left:0;right:0;bottom:32px;text-align:center;color:#6b6b78;font:14px system-ui,sans-serif;text-decoration:none">Back to Stremio</a>
+</body></html>`;
+}
+
+// Only these targets, so /refresh/go can't be pointed anywhere else.
+const REDIRECT_TARGETS = { home: 'stremio:///', library: 'stremio:///library' };
+
 function artVersion(...parts) {
   return crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 10);
 }
@@ -66,16 +92,41 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
       : `${counts}. Opening this switches the account to ${p.name}. Then close and reopen Stremio.`;
   }
 
-  function stream(title, clip = 'switching.mp4') {
+  // `description` only. stremio-core reads `title` as an alias of it
+  // (types/resource/stream.rs), so sending both is a duplicate field: the
+  // stream fails to parse, is skipped, and Stremio says "No streams were found".
+  // Key line first: phones truncate.
+  function stream(description, clip = 'switching.mp4') {
     return {
       name: 'OpenProfiles',
-      // Stremio 4 reads `title`, Stremio 5 reads `description`. Key line first: phones truncate.
-      title,
-      description: title,
+      description,
       url: `${publicUrl}/clips/${clip}`,
       behaviorHints: { notWebReady: true },
     };
   }
+
+  /**
+   * Tapping this opens /refresh/go, which redirects straight back into
+   * Stremio with a stremio:// deep link (no page renders). Leaving and
+   * re-entering the app makes it re-sync; see autoRefreshTarget.
+   */
+  function refreshStream(description) {
+    return { name: 'OpenProfiles', description, externalUrl: `${publicUrl}/refresh/go?to=auto` };
+  }
+
+  // An HTTP redirect into the app. Browsers still show the response body while
+  // they hand a stremio:// link over (Express's default is "Found.
+  // Redirecting to …"), so the body is a near-empty page in Stremio's colours.
+  // `to=auto` picks per device (see autoRefreshTarget).
+  router.get('/refresh/go', (req, res) => {
+    const to = req.query.to === 'auto' ? autoRefreshTarget(req.get('user-agent')) : req.query.to;
+    const target = REDIRECT_TARGETS[to] ?? REDIRECT_TARGETS.home;
+    res.status(302)
+      .set('Location', target)
+      .set('Cache-Control', 'no-store')
+      .type('html')
+      .send(handoffPage(target));
+  });
 
   router.get('/logo.png', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=86400').type('png').send(await art.get('logo', renderLogo));
@@ -139,10 +190,15 @@ export function createAddonRouter({ config, service, log, waitMs = SWITCH_WAIT_M
     }
     const { result } = outcome;
     const lines = result.alreadyActive
-      ? [`${p.name} is in use`, "Don't see it? Close and reopen Stremio."]
-      : [`Switched to ${p.name}`, 'Close and reopen Stremio to see it.'];
+      ? [`${p.name} is in use`, "Tap to refresh Stremio if you don't see it yet."]
+      : [`Switched to ${p.name}`, 'Tap here to refresh Stremio.'];
     if (result.warnings?.length) lines.push("Some parts didn't switch. The OpenProfiles page has details.");
-    return res.json({ streams: [stream(lines.join('\n'))] });
+    return res.json({
+      streams: [
+        refreshStream(lines.join('\n')),
+        stream("Didn't refresh? Close and reopen Stremio.\nThis clip is just a reminder."),
+      ],
+    });
   }));
 
   router.get('/:token/poster/:id.png', withToken(async (req, res, state) => {

@@ -21,11 +21,24 @@ each profile. When you switch, it:
 Things to know:
 
 - **Switching changes every device signed in to the account.** Everyone sees the same profile.
-- **Close and reopen Stremio after switching.** That's the only refresh that works on every app.
+- **Refreshing after a switch:** in the Switch profile row, tap the profile's first stream
+  ("Tap here to refresh Stremio"). It hops out to the server and straight back, which makes
+  Stremio reload: Home on desktop, your Library on Android (then go back Home). After switching
+  from the settings page, just click back into the Stremio window. Apps where that doesn't work
+  (older or TV apps) need a close and reopen.
 - **Save before switching** if you finished watching something on another device. Use *Save now*
   on the profile in use, so its latest progress is kept.
 - **Opening a profile in the Switch profile row switches to it.** Stremio asks for the profile's
   "stream" as soon as its page opens, and that request is the switch.
+
+### Known limitation: stray "new episode" cards
+
+Stremio keeps its new-episode alerts (the "+3" badges) on each device and rebuilds them only
+every 6 hours. Continue Watching shows any show with alerts, even one that isn't in the current
+profile. So for up to 6 hours after a switch, the previous profile's shows with new episodes can
+appear in Continue Watching. Dismiss the card to remove it, or wait. Likewise, the new profile's
+own new-episode badges appear at the next rebuild. This happens inside the Stremio app; an
+add-on can't trigger the rebuild.
 
 ## Set up
 

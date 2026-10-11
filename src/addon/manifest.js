@@ -13,7 +13,7 @@ export function buildManifest({ publicUrl }) {
     id: ADDON_ID,
     version,
     name: 'OpenProfiles',
-    description: 'Switch between the profiles saved for this Stremio account. Opening a profile switches to it; then close and reopen Stremio.',
+    description: 'Switch between the profiles saved for this Stremio account. Opening a profile switches to it; tap its stream to refresh Stremio.',
     logo: `${publicUrl}/logo.png`,
     types: [CATALOG_TYPE],
     catalogs: [{ type: CATALOG_TYPE, id: CATALOG_ID, name: 'Switch profile' }],

@@ -243,7 +243,7 @@ function addonCard(addon, csrf) {
       ${status}
     </div>
     <p class="lede">Installing adds a <strong>Switch profile</strong> row to Stremio's Home. Opening a
-      profile there switches to it; then close and reopen Stremio. Every profile keeps the add-on, so the
+      profile there switches to it; tap its stream and Stremio refreshes. Every profile keeps the add-on, so the
       row never disappears.</p>
     <div class="row">
       <a class="button primary" href="${addon.installUrl}">Install in Stremio</a>
