@@ -105,8 +105,11 @@ describe('download everything', () => {
   it('refuses a wrong passphrase, and a file from another account unless confirmed', async () => {
     const a = await linkedWithKids();
     const sealed = JSON.parse(JSON.stringify(a.service.exportEverything('right passphrase')));
-    assert.throws(() => openExport(sealed, 'wrong passphrase'), (e) => e.code === 'WRONG_PASSPHRASE');
-    assert.throws(() => openExport(sealed, null), (e) => e.code === 'PASSPHRASE_NEEDED');
+    await assert.rejects(openExport(sealed, 'wrong passphrase'), (e) => e.code === 'WRONG_PASSPHRASE');
+    await assert.rejects(openExport(sealed, null), (e) => e.code === 'PASSPHRASE_NEEDED');
+    // A file can't pick its own (expensive) key-derivation settings.
+    const costly = { ...sealed, kdf: { ...sealed.kdf, p: 100000 } };
+    await assert.rejects(openExport(costly, 'right passphrase'), (e) => e.code === 'NOT_AN_EXPORT');
 
     const plain = JSON.parse(JSON.stringify(a.service.exportEverything(null)));
     plain.stremio_user_id = 'someone-else';

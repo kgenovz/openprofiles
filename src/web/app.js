@@ -32,10 +32,10 @@ const idParam = (req) => {
   return Number.isSafeInteger(id) && id > 0 ? id : -1;
 };
 
-/** A form field that may be sent once, many times or not at all. */
 /** A request path fit for the log: add-on links carry the account's secret token as a segment. */
 const logPath = (p) => String(p).replace(/[A-Za-z0-9_-]{20,}/g, '…');
 
+/** A form field that may be sent once, many times or not at all. */
 const many = (v) => (v == null ? [] : Array.isArray(v) ? v.map(String) : [String(v)]);
 
 /** Cinemeta switches as posted ("on" when ticked) into cinemeta.js settings. */
@@ -49,11 +49,15 @@ const cinemetaFromForm = (body, prefix = '') => ({
 
 /** Catalog renames posted as `name:<ref>:<type>:<id>` fields. */
 function renamesFromForm(body) {
-  const renames = {};
+  // Field names come from the client: only well-formed refs, and objects without a
+  // prototype, so a name like "name:__proto__:x" can't reach Object.prototype.
+  const renames = Object.create(null);
   for (const [key, value] of Object.entries(body)) {
     if (!key.startsWith('name:')) continue;
     const [, ref, ...rest] = key.split(':');
-    (renames[ref] ??= {})[rest.join(':')] = String(value);
+    const catalog = rest.join(':');
+    if (!/^[0-9a-f]{16}$/.test(ref) || !catalog || catalog.length > 200) continue;
+    (renames[ref] ??= Object.create(null))[catalog] = String(value);
   }
   return renames;
 }
@@ -218,7 +222,7 @@ export function createApp({ config, db, accounts, log }) {
       return res.redirect(303, '/configure');
     } catch (err) {
       if (!err.userMessage) log.error('Profile creation failed', { error: err.message, stack: err.stack });
-      if (b.addons_shown !== '1') {
+      if (b.wizard !== '1') {
         auth.setFlash(req, { type: 'error', text: userMessageOf(err) });
         return res.redirect(303, '/configure');
       }
@@ -548,7 +552,9 @@ export function createApp({ config, db, accounts, log }) {
   app.use((req, res) => sendPage(res, errorPage({ status: 404, message: "There's nothing here." }), 404));
   // Four parameters is how Express recognises an error handler.
   app.use((err, req, res, _next) => {
-    log.error('Request failed', { path: logPath(req.path), error: err.message, stack: err.stack });
+    // A body that won't parse: its error message quotes part of the body, so it stays out of the log.
+    const parse = err.type === 'entity.parse.failed' || err.type === 'entity.too.large';
+    log.error('Request failed', { path: logPath(req.path), ...(parse ? { error: err.type } : { error: err.message, stack: err.stack }) });
     const status = err.status && err.status < 500 ? err.status : 500;
     sendPage(res, errorPage({ status, message: status === 500 ? 'The server log has details.' : 'That request was not valid.' }), status);
   });

@@ -18,6 +18,13 @@ document.addEventListener('submit', (event) => {
     event.preventDefault();
     return;
   }
+  // Downloads don't leave the page, so nothing would ever undo a busy state.
+  if (form.hasAttribute('data-no-busy')) return;
+  // A disabled button isn't sent with the form, so carry the clicked one's value over.
+  const submitter = event.submitter;
+  if (submitter?.name) {
+    form.append(Object.assign(document.createElement('input'), { type: 'hidden', name: submitter.name, value: submitter.value }));
+  }
   for (const button of form.querySelectorAll('button[type="submit"]')) {
     button.disabled = true;
     button.dataset.label = button.textContent;
@@ -238,6 +245,12 @@ document.addEventListener('dragover', (event) => {
   const after = [...list.children].find((li) => li !== dragged && event.clientY < li.getBoundingClientRect().top + li.offsetHeight / 2);
   list.insertBefore(dragged, after ?? null);
 });
+document.addEventListener('drop', (event) => {
+  if (dragged) event.preventDefault();
+});
+document.addEventListener('pointerup', () => {
+  if (!dragged) for (const li of document.querySelectorAll('[data-addon-list] > li[draggable="true"]')) li.draggable = false;
+});
 document.addEventListener('dragend', () => {
   if (!dragged) return;
   dragged.classList.remove('is-dragging');
@@ -269,9 +282,12 @@ async function addByLink(box) {
       return;
     }
     const existing = list.querySelector(`li[data-ref="${data.ref}"]`);
+    box.closest('form').querySelector(`[data-pool-select] option[value="${data.ref}"]`)?.remove();
     if (existing) {
       const tick = existing.querySelector('input[type="checkbox"][name="addon"]');
       if (tick) tick.checked = true;
+      const removal = existing.querySelector('input[name="remove"]');
+      if (removal) removal.checked = false;
       status.textContent = `${data.name} is already in the list.`;
     } else {
       list.insertAdjacentHTML('beforeend', data.html);
@@ -287,6 +303,7 @@ async function addByLink(box) {
 for (const box of document.querySelectorAll('[data-add-link]')) {
   const go = box.querySelector('[data-add-go]');
   go.hidden = false;
+  box.querySelector('[data-add-url]').removeAttribute('name');
   go.addEventListener('click', () => addByLink(box));
   box.querySelector('[data-add-url]').addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
@@ -366,6 +383,12 @@ if (managerForm) {
     try {
       const res = await fetch(health.dataset.healthCheck, { method: 'POST', headers: { 'x-csrf-token': csrfOf(health) } });
       const results = await res.json();
+      if (!res.ok) {
+        health.textContent = results.error || "Couldn't check them.";
+        setTimeout(() => { health.textContent = label; }, 4000);
+        health.disabled = false;
+        return;
+      }
       const words = { ok: 'Working', unreachable: "Can't reach", device: 'On your device' };
       for (const li of list.children) {
         const pill = li.querySelector('[data-health]');
@@ -430,6 +453,9 @@ if (wizard) {
   let current = 1;
 
   wizard.classList.add('is-js');
+  for (const name of ['addons_shown', 'cm_shown']) {
+    wizard.append(Object.assign(document.createElement('input'), { type: 'hidden', name, value: '1' }));
+  }
   nav.hidden = false;
 
   const ticked = () => [...list.children].filter((li) => li.querySelector('input[name="addon"]').checked);
@@ -521,6 +547,9 @@ if (wizard) {
     nav.querySelectorAll('li').forEach((li, i) => {
       li.classList.toggle('is-done', i + 1 < n);
       li.classList.toggle('is-current', i + 1 === n);
+      const button = li.querySelector('button');
+      if (i + 1 === n) button.setAttribute('aria-current', 'step');
+      else button.removeAttribute('aria-current');
     });
     back.hidden = n === 1;
     next.hidden = n === steps.length;
@@ -548,8 +577,8 @@ if (wizard) {
   });
 
   wizard.addEventListener('change', (event) => {
-    if (event.target.matches('input[name="from"], [data-source]')) applyStart();
     if (event.target.matches('[data-source]')) wizard.querySelector('input[name="from"][value="profile"]').checked = true;
+    if (event.target.matches('input[name="from"], [data-source]')) applyStart();
     syncCinemeta();
   });
   wizard.addEventListener('addons:changed', syncCinemeta);
@@ -579,6 +608,13 @@ if (wizard) {
   });
 
   show(1, { focus: false });
+}
+
+const flash = document.querySelector('main > .flash');
+const flashTarget = location.hash.length > 1 && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+if (flash && flashTarget && !flashTarget.contains(flash)) {
+  flashTarget.prepend(flash);
+  flashTarget.scrollIntoView();
 }
 
 // Back/forward cache can restore the page with buttons still disabled.

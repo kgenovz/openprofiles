@@ -1139,7 +1139,7 @@ export class ProfilesService {
   importEverything(raw, { passphrase, acceptOtherAccount = false } = {}) {
     return this.lock.run(async () => {
       const account = this.requireAccount();
-      const file = openExport(raw, passphrase);
+      const file = await openExport(raw, passphrase);
       if (file.stremio_user_id !== account.stremio_user_id && !acceptOtherAccount) {
         throw new UserError('OTHER_ACCOUNT', `This export is from ${file.stremio_email || 'another Stremio account'}. Tick the box to confirm you want it on this account anyway.`);
       }

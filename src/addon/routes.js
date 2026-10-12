@@ -131,7 +131,7 @@ export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_
   // `to=auto` picks per device (see autoRefreshTarget).
   router.get('/refresh/go', (req, res) => {
     const to = req.query.to === 'auto' ? autoRefreshTarget(req.get('user-agent')) : req.query.to;
-    const target = REDIRECT_TARGETS[to] ?? REDIRECT_TARGETS.home;
+    const target = typeof to === 'string' && Object.hasOwn(REDIRECT_TARGETS, to) ? REDIRECT_TARGETS[to] : REDIRECT_TARGETS.home;
     res.status(302)
       .set('Location', target)
       .set('Cache-Control', 'no-store')

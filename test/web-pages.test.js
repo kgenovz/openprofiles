@@ -72,7 +72,7 @@ describe('web pages', () => {
   });
 
   it('a refused wizard comes back with what was picked', async () => {
-    const res = await b.post('/profiles', [['name', 'Original'], ['from', 'empty'], ['addons_shown', '1'], ['cm_shown', '1']]);
+    const res = await b.post('/profiles', [['wizard', '1'], ['name', 'Original'], ['from', 'empty']]);
     assert.equal(res.status, 400);
     assert.match(res.text, /already a profile called/);
     assert.match(res.text, /name="name" value="Original"/);
@@ -102,6 +102,17 @@ describe('web pages', () => {
 
     await b.post(`/edits/${undo}/undo`);
     assert.deepEqual(saved(kids.id).addons.map((a) => a.manifest.name), ['tmdb', 'Cinemeta', 'OpenProfiles']);
+  });
+
+  it("a crafted rename field can't reach Object.prototype", async () => {
+    const kids = repo().listProfiles().find((p) => p.name === 'Kids');
+    const manager = (await b.request(`/profiles/${kids.id}/addons`)).text;
+    const baseHash = manager.match(/name="base" value="([0-9a-f]+)"/)[1];
+    const refs = [...manager.matchAll(/name="ref" value="([0-9a-f]{16})"/g)].map((m) => ['ref', m[1]]);
+    await b.post(`/profiles/${kids.id}/addons`, [['base', baseHash], ...refs, ['name:__proto__:redirect', 'https://evil.example/'], ['name:constructor:x', 'y']]);
+    assert.equal(({}).redirect, undefined, 'Object.prototype untouched');
+    const after = await b.post(`/profiles/${kids.id}/switch`);
+    assert.doesNotMatch(String(after.location), /evil/);
   });
 
   it('Cinemeta switches save and warn when details pages have no other source', async () => {

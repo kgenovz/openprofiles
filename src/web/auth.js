@@ -23,14 +23,27 @@ function parseCookies(header = '') {
   return out;
 }
 
-/** Counts attempts per key in a sliding window; `hit` returns true once the key is over its limit. */
+const LIMITER_MAX_KEYS = 10000;
+const MAX_EMAIL_LENGTH = 254;
+
+/**
+ * Counts attempts per key in a window; `hit` returns true once the key is over
+ * its limit. Expired keys are swept, and the map has a ceiling, so a flood of
+ * distinct keys can't grow memory without bound.
+ */
 function limiter(max, now) {
   const seen = new Map();
+  let nextSweep = 0;
   return {
     hit(key) {
       const t = now();
+      if (t >= nextSweep) {
+        for (const [k, e] of seen) if (e.resetAt <= t) seen.delete(k);
+        nextSweep = t + 60 * 1000;
+      }
       const entry = seen.get(key);
       if (!entry || entry.resetAt <= t) {
+        while (seen.size >= LIMITER_MAX_KEYS) seen.delete(seen.keys().next().value);
         seen.set(key, { count: 1, resetAt: t + LOGIN_WINDOW_MS });
         return false;
       }
@@ -41,6 +54,14 @@ function limiter(max, now) {
       seen.delete(key);
     },
   };
+}
+
+/** IPv6 clients usually hold a whole /64, so they are counted per /64. */
+function ipKey(ip = '') {
+  if (!ip.includes(':') || ip.startsWith('::ffff:')) return ip;
+  const [head] = ip.split('::');
+  const groups = ip.includes('::') ? head.split(':').filter(Boolean) : ip.split(':');
+  return `${groups.slice(0, 4).join(':')}::/64`;
 }
 
 /**
@@ -88,14 +109,15 @@ export function createAuth({ db, config, now = () => Date.now() }) {
   return {
     /** Checks the rate limits before asking Stremio. Returns an error message, or null to go ahead. */
     checkSignInLimits(req, email) {
-      const overIp = byIp.hit(req.ip);
-      const overEmail = byEmail.hit(String(email || '').trim().toLowerCase());
-      return overIp || overEmail ? 'Too many sign-in attempts. Wait 15 minutes and try again.' : null;
+      const address = String(email || '').trim().toLowerCase();
+      if (address.length > MAX_EMAIL_LENGTH) return "That isn't an email address Stremio would accept.";
+      // Over the address limit: refused before the email is even counted.
+      if (byIp.hit(ipKey(req.ip))) return 'Too many sign-in attempts. Wait 15 minutes and try again.';
+      return byEmail.hit(address) ? 'Too many sign-in attempts. Wait 15 minutes and try again.' : null;
     },
 
     /** After Stremio accepted the sign-in: start a session for the account and set the cookie. */
     startSession(req, res, accountId, email, flash = null) {
-      byIp.clear(req.ip);
       byEmail.clear(String(email || '').trim().toLowerCase());
       q.expire.run(now());
       const token = randomToken(32);

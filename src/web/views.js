@@ -190,7 +190,7 @@ function undoBanner(undo, csrf) {
       ${postButton({ action: `/edits/${undo.id}/undo`, csrf, label: 'Undo', style: 'undo-button' })}
       <form method="post" action="/edits/${undo.id}/hide" class="inline" data-undo-hide>
         ${csrfField(csrf)}
-        <button type="submit" class="undo-button undo-hide" aria-label="Hide this bar (undo stays on the Backups tab)">Hide</button>
+        <button type="submit" class="undo-button undo-hide" aria-label="Hide this bar">Hide</button>
       </form>
     </span>
   </div>`;
@@ -349,7 +349,7 @@ function profileEditor(d, { csrf, locked }) {
           ${stat('Last saved', ago(p.snapshot_taken_at))}
         </dl>
         ${d.active
-          ? html`<div class="row">${postButton({ action: `/profiles/${p.id}/save`, csrf, label: 'Save now', disabled: locked })}
+          ? html`<div class="row">${postButton({ action: `/profiles/${p.id}/save?back=edit`, csrf, label: 'Save now', disabled: locked })}
               <span class="hint">${p.name} is in use, so Stremio holds the newest copy. Save now copies it here; switching away does too.</span></div>`
           : html`<p class="hint">This is what ${p.name} holds while it isn't in use. Switching to it puts it into Stremio.</p>`}
       </div>
@@ -471,10 +471,9 @@ export function wizardPage({ csrf, account, options, error = null, values = {} }
     account,
     csrf,
     tab: 'profiles',
-    body: html`<form method="post" action="/profiles" class="card wizard" data-wizard data-starts="${startData}" ${values.addons ? 'data-restored' : ''}>
+    body: html`<form method="post" action="/profiles" class="card wizard" data-wizard data-starts="${startData}">
       ${csrfField(csrf)}
-      <input type="hidden" name="addons_shown" value="1">
-      <input type="hidden" name="cm_shown" value="1">
+      <input type="hidden" name="wizard" value="1">
       <div class="wizard-head">
         <div class="section-head"><h1>New profile</h1><a href="/configure" class="button icon-button" aria-label="Close">×</a></div>
         <ol class="wizard-steps" hidden>
@@ -730,7 +729,7 @@ function everythingCard(csrf) {
     <p class="lede">Every profile and backup of your account, to keep somewhere safe or to move to another
       OpenProfiles server. Add a passphrase to lock the file; without it, anyone with the file can read your
       add-on links and watch history.</p>
-    <form method="post" action="/export" class="row align-end">
+    <form method="post" action="/export" class="row align-end" data-no-busy>
       ${csrfField(csrf)}
       <label class="grow">Passphrase (optional) <input type="password" name="passphrase" autocomplete="new-password" minlength="8"></label>
       <button type="submit">Download everything</button>

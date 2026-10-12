@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
 import { GuardError } from './guard.js';
+
+const scrypt = promisify(crypto.scrypt);
 
 /**
  * "Download everything": one file holding every profile and backup of an
@@ -34,20 +37,23 @@ export function sealExport(payload, passphrase) {
   };
 }
 
-/** Unwrap an export file. Throws GuardError for anything that isn't a readable export. */
-export function openExport(file, passphrase) {
+/** Unwrap an export file. Rejects with GuardError for anything that isn't a readable export. */
+export async function openExport(file, passphrase) {
   if (!file || typeof file !== 'object' || file.format !== EXPORT_FORMAT) {
     throw new GuardError('NOT_AN_EXPORT', "That file isn't an OpenProfiles export.");
   }
   if (file.version !== 1) throw new GuardError('UNSUPPORTED', `This export is version ${file.version}; this server reads version 1.`);
   if (!file.encrypted) return file;
   if (!passphrase) throw new GuardError('PASSPHRASE_NEEDED', 'This export is protected. Enter its passphrase.');
+  // The cost settings come from the file, so only the ones this server writes are
+  // accepted: anything else could keep the server busy for hours.
+  const { kdf } = file;
+  if (kdf?.name !== 'scrypt' || kdf.N !== SCRYPT.N || kdf.r !== SCRYPT.r || kdf.p !== SCRYPT.p || typeof kdf.salt !== 'string') {
+    throw new GuardError('NOT_AN_EXPORT', "This export's protection isn't one OpenProfiles makes, so it can't be opened here.");
+  }
   try {
-    const { kdf } = file;
-    if (kdf?.name !== 'scrypt' || kdf.N > 2 ** 20) throw new Error('kdf');
-    const key = crypto.scryptSync(String(passphrase).normalize('NFKC'), Buffer.from(kdf.salt, 'base64'), 32, {
-      N: kdf.N, r: kdf.r, p: kdf.p, maxmem: 256 * 1024 * 1024,
-    });
+    // Async, so a long derivation doesn't hold up everyone else's requests.
+    const key = await scrypt(String(passphrase).normalize('NFKC'), Buffer.from(kdf.salt, 'base64'), 32, SCRYPT);
     const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(file.iv, 'base64'));
     d.setAAD(Buffer.from(EXPORT_FORMAT));
     d.setAuthTag(Buffer.from(file.tag, 'base64'));
