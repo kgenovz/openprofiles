@@ -291,7 +291,7 @@ async function addByLink(box) {
       status.textContent = `${data.name} is already in the list.`;
     } else {
       list.insertAdjacentHTML('beforeend', data.html);
-      status.textContent = `Added ${data.name} at the end.`;
+      status.textContent = `Added ${data.name}.`;
     }
     input.value = '';
     listChanged(list);

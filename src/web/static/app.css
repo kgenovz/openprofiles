@@ -460,7 +460,7 @@ main.wide { max-width: 1240px; }
 .back-link { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; text-decoration: none; justify-self: start; }
 .manager { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px; align-items: start; }
 @media (max-width: 980px) { .manager { grid-template-columns: 1fr; } }
-.add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; border-top: 1px solid var(--border); padding-top: 16px; }
+.add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); align-items: start; gap: 14px; border-top: 1px solid var(--border); padding-top: 16px; }
 .add-by-link { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 .add-by-link[hidden], .add-by-link [hidden] { display: none; }
 .add-by-link > .hint { flex-basis: 100%; margin: 0; }
