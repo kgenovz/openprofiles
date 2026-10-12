@@ -19,7 +19,12 @@ export function snapshotDatabase(db, dataDir, now = Date.now()) {
   const dir = path.join(dataDir, 'snapshots');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `openprofiles-${dayOf(now)}.db`);
-  if (!fs.existsSync(file)) db.prepare('VACUUM INTO ?').run(file);
+  if (!fs.existsSync(file)) {
+    const partial = `${file}.partial`;
+    fs.rmSync(partial, { force: true });
+    db.prepare('VACUUM INTO ?').run(partial);
+    fs.renameSync(partial, file);
+  }
   for (const name of fs.readdirSync(dir)) {
     const m = SNAPSHOT_RE.exec(name);
     if (!m) continue;
@@ -55,7 +60,11 @@ export async function runDaily({ db, dataDir, accounts, log = silentLogger, now 
       summary.failed++;
       log.warn('Daily backup failed for an account', { accountId: id, error: err.userMessage || err.message });
     }
-    summary.purged += service.repo.purgeBin(now() - BIN_DAYS * DAY_MS);
+    try {
+      summary.purged += service.repo.purgeBin(now() - BIN_DAYS * DAY_MS);
+    } catch (err) {
+      log.warn('Emptying the bin failed for an account', { accountId: id, error: err.message });
+    }
     if (i < ids.length - 1) await pause();
   }
   db.prepare("INSERT INTO meta (key, value) VALUES ('last_daily', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")

@@ -86,7 +86,7 @@ export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_
     const counts = `${p.library_count} title${p.library_count === 1 ? '' : 's'} · ${p.addon_count} add-on${p.addon_count === 1 ? '' : 's'}`;
     return active
       ? `${counts}. This is the profile in use.`
-      : `${counts}. Opening this switches the account to ${p.name}. Then close and reopen Stremio.`;
+      : `${counts}. Opening this switches the account to ${p.name}.`;
   }
 
   // `description` only. stremio-core reads `title` as an alias of it

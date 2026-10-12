@@ -1,7 +1,7 @@
-import { randomToken } from '../crypto.js';
+import { DecryptError, randomToken } from '../crypto.js';
 import { silentLogger } from '../log.js';
 import {
-  addonPool, addonRef, addonsHash, cinemetaOf, describeAddon, describeListChange, droppedProtected, listFromRefs,
+  addonPool, addonRef, addonsFingerprint, addonsHash, cinemetaOf, describeAddon, describeListChange, droppedProtected, listFromRefs,
   runsOnDevice,
 } from './addons.js';
 import {
@@ -30,6 +30,8 @@ const MAX_NAME_LENGTH = 40;
 const IMPORT_STASH_MS = 15 * 60 * 1000;
 export const MAX_PROFILES = 20;
 export const BIN_DAYS = 30;
+// Deleted profiles kept at most; beyond it the oldest goes for good.
+export const BIN_MAX = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const UNDO_MS = DAY_MS;
 const ADDON_STASH_MS = 30 * 60 * 1000;
@@ -37,6 +39,8 @@ const HEALTH_CONCURRENCY = 4;
 // Add-on fetches an account may make (by link, health checks) in a window: plenty for a person,
 // too few to use a shared server as a fetching proxy.
 const FETCH_BUDGET = 80;
+// An everything import keeps at most this many of the file's backups (the newest).
+const IMPORT_MAX_BACKUPS = 15;
 const FETCH_WINDOW_MS = 10 * 60 * 1000;
 
 export const NO_DETAILS_WARNING =
@@ -240,7 +244,7 @@ export class ProfilesService {
       if (start === 'current') {
         live = await this.readLive(authKey);
         this.checkLiveSize(live);
-        snapshot = this.capture(live);
+        snapshot = this.profileCopy(this.capture(live));
       } else if (start === 'empty') {
         const addons = await this.stremio.getAddons(authKey);
         this.noteAddons(addons);
@@ -276,6 +280,7 @@ export class ProfilesService {
       }
       checkAddons(snapshot.addons, clean);
 
+      this.assertNameFree(clean);
       const id = this.repo.insertProfile({ name: clean, avatarPreset: picture, avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot });
       this.repo.logActivity('profile', `Created "${clean}"`);
       let switched = null;
@@ -529,8 +534,8 @@ export class ProfilesService {
       editKind: 'addons',
       label: (p) => `Before adding Cinemeta to ${p.name}`,
       change: async (current, profile) => {
-        if (findCinemeta(current).index !== -1) return { addons: current, activity: '' };
-        const stock = await this.fetchStockCinemeta({ transportUrl: CINEMETA_STOCK_URL });
+        if (findCinemeta(current).index !== -1) return { addons: current, activity: '', noChange: true };
+        const stock = await this.fetchStockCinemeta();
         shell = current.some((a) => !isSelfAddon(a) && (givesTitleDetails(a) || givesOwnDetailsOnly(a)));
         const manifest = shell
           ? buildManifest({ current: stock, settings: { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true } })
@@ -551,7 +556,7 @@ export class ProfilesService {
       change: async (current, profile) => {
         const { index } = findCinemeta(current);
         if (index === -1) throw new UserError('NO_CINEMETA', `${profile.name} doesn't have Cinemeta, so there's nothing to reset.`);
-        const stock = await this.fetchStockCinemeta(current[index]);
+        const stock = await this.fetchStockCinemeta();
         const addons = current.slice();
         addons[index] = { ...current[index], manifest: stock };
         return { addons, activity: `Reset ${profile.name}'s Cinemeta to Stremio's default` };
@@ -566,17 +571,17 @@ export class ProfilesService {
     const current = addons[index].manifest;
     const next = { ...STOCK_SETTINGS, ...settings };
     if (sameSettings(deriveSettings(current), next)) return addons;
-    const stock = needsStock(current, next) ? await this.fetchStockCinemeta(addons[index]) : null;
+    const stock = needsStock(current, next) ? await this.fetchStockCinemeta() : null;
     const out = addons.slice();
     out[index] = { ...addons[index], manifest: buildManifest({ current, stock, settings: next }) };
     if (next.removeMeta && !anotherAddonServesMeta(out, index)) warnings.push(NO_DETAILS_WARNING);
     return out;
   }
 
-  async fetchStockCinemeta(addon) {
+  async fetchStockCinemeta() {
     let stock;
     try {
-      stock = checkManifest(await this.fetchManifest(addon.transportUrl));
+      stock = checkManifest(await this.fetchManifest(CINEMETA_STOCK_URL));
     } catch (err) {
       this.log.warn('Stock Cinemeta fetch failed', { error: err.message });
       throw new UserError('CINEMETA_UNREACHABLE', "Couldn't reach Cinemeta to bring those rows back, so nothing was changed. Try again in a minute.");
@@ -615,7 +620,8 @@ export class ProfilesService {
       throw new UserError('CHANGED', `${profile.name}'s add-ons changed since this page was opened${active ? ' (in Stremio)' : ''}. Nothing was saved: reload the page and make the change again.`);
     }
 
-    const { addons: wanted, activity, warnings = [] } = await change(current, profile);
+    const { addons: wanted, activity, warnings = [], noChange = false } = await change(current, profile);
+    if (noChange) return { changed: false, warnings: [], active, profile };
     const next = this.prepareAddons(wanted);
     checkAddons(next, profile.name);
     if (JSON.stringify(next) === JSON.stringify(current)) return { changed: false, warnings: [], active, profile };
@@ -627,11 +633,17 @@ export class ProfilesService {
       try {
         await this.stremio.setAddons(authKey, next);
       } catch (err) {
+        // Unreachable means no answer: Stremio may still have applied it, so the backup
+        // of the old list stays. Any other error is a definite no.
+        if (err.kind === 'unreachable') {
+          throw new UserError('WRITE_UNKNOWN', `Stremio didn't answer, so the new add-on list may or may not have been saved there. The list from before was backed up; reload the page to see which one Stremio has.`, { cause: err });
+        }
         this.repo.deleteBackup(backupId);
         throw new UserError('WRITE_FAILED', `Stremio didn't take the new add-on list, so nothing changed: ${userMessageOf(err)}`, { cause: err });
       }
       this.noteAddons(next);
     }
+    this.repo.setAfterHash(backupId, addonsFingerprint(next));
     this.repo.saveProfileAddons(profileId, next);
     this.repo.pruneBackups();
     this.repo.logActivity('edit', activity);
@@ -656,6 +668,10 @@ export class ProfilesService {
       if (!row || row.kind !== 'pre_change' || !['addons', 'cinemeta'].includes(row.edit_kind) || row.undone_at != null) {
         throw new UserError('NOT_FOUND', "That edit can't be undone any more.");
       }
+      // Only the newest edit, within the undo window: an older one would also throw away the ones after it.
+      if (this.latestUndo()?.id !== row.id) {
+        throw new UserError('NOT_LATEST', "Only the latest edit can be undone here. To go back further, restore its backup on the Backups tab.");
+      }
       if (row.profile_id == null || !this.repo.getProfile(row.profile_id)) {
         throw new UserError('NOT_FOUND', 'The profile that edit was made to no longer exists.');
       }
@@ -665,9 +681,38 @@ export class ProfilesService {
         base: null,
         editKind: 'undo',
         label: (p) => `Before undoing an edit of ${p.name}'s add-ons`,
-        change: async (current, profile) => ({ addons, activity: `Undid an edit of ${profile.name}'s add-ons` }),
+        change: async (current, profile) => {
+          if (row.after_hash && addonsFingerprint(current) !== row.after_hash) {
+            throw new UserError('CHANGED_SINCE', `${profile.name}'s add-ons changed after that edit, so undoing it would also undo those changes. Nothing was changed. To go back anyway, restore it from the Backups tab.`);
+          }
+          return { addons, activity: `Undid an edit of ${profile.name}'s add-ons` };
+        },
       });
       this.repo.markUndone(backupId);
+      return result;
+    });
+  }
+
+  /**
+   * From the Backups tab: put back only the add-on list an edit's backup holds,
+   * onto the profile it was taken of (no newest-edit or changed-since checks:
+   * the restore preview says what this replaces). The library stays.
+   */
+  restoreAddonsFromBackup(backupId) {
+    return this.lock.run(async () => {
+      const account = this.requireAccount();
+      const row = this.repo.getBackupRow(backupId);
+      if (!row || row.kind !== 'pre_change' || row.profile_id == null) throw new UserError('NOT_FOUND', "That backup can't put back add-ons on its own.");
+      if (!this.repo.getProfile(row.profile_id)) throw new UserError('NOT_FOUND', 'The profile that backup was taken of no longer exists. Restore the whole backup instead.');
+      this.assertAnchor(row, account, 'This backup');
+      const { addons } = decodeSnapshot(this.repo.cipher, row, 'This backup');
+      const result = await this.doEditAddons(row.profile_id, {
+        base: null,
+        editKind: 'undo',
+        label: (p) => `Before putting back ${p.name}'s add-ons from a backup`,
+        change: async (current, profile) => ({ addons, activity: `Put ${profile.name}'s add-ons back to "${row.label}"` }),
+      });
+      if (row.edit_kind && row.undone_at == null) this.repo.markUndone(backupId);
       return result;
     });
   }
@@ -763,6 +808,7 @@ export class ProfilesService {
         throw new UserError('RECOVERY_NEEDED', 'An unfinished switch involves this profile. Resolve it first.');
       }
       this.repo.moveProfileToBin(id);
+      this.repo.trimBin(BIN_MAX);
       this.repo.logActivity('profile', `Deleted "${profile.name}" (in the bin for ${BIN_DAYS} days)`);
       this.log.info('Profile moved to the bin', { profileId: id });
     });
@@ -799,8 +845,10 @@ export class ProfilesService {
       const { authKey } = await this.session();
       const live = await this.readLive(authKey);
       this.checkLiveSize(live);
-      this.repo.saveProfileSnapshot(profile.id, this.capture(live));
-      return { profile: this.repo.getProfile(profile.id), notifsSaved: live.notifs !== null };
+      this.assertPlausibleLive(live, profile);
+      const copy = this.profileCopy(this.capture(live));
+      this.repo.saveProfileSnapshot(profile.id, copy);
+      return { profile: this.repo.getProfile(profile.id), notifsSaved: copy.notifs !== null };
     });
   }
 
@@ -816,11 +864,12 @@ export class ProfilesService {
     const target = this.repo.getProfileRow(profileId);
     if (!target) throw new UserError('NOT_FOUND', 'That profile no longer exists.');
 
-    // 1. Idempotent: Stremio can request the stream more than once.
+    // 1. A half-finished switch comes first, so it isn't hidden behind "already in use".
+    this.assertNoOpenJournal();
+    // Idempotent: Stremio can request the stream more than once.
     if (state.active_profile_id === profileId) {
       return { alreadyActive: true, profile: this.repo.getProfile(profileId), warnings: [] };
     }
-    this.assertNoOpenJournal();
 
     // 2-4. Valid sign-in, same account, target decodes cleanly. No writes yet.
     const { authKey } = await this.session();
@@ -832,6 +881,7 @@ export class ProfilesService {
     this.checkLiveSize(live);
     const captured = this.capture(live);
     const outgoing = state.active_profile_id != null ? this.repo.getProfile(state.active_profile_id) : null;
+    this.assertPlausibleLive(live, outgoing);
 
     // 6-7. Backup, save the outgoing profile and open the journal, all or nothing.
     const journalId = this.repo.transaction(() => {
@@ -841,7 +891,7 @@ export class ProfilesService {
         stremioUserId: account.stremio_user_id,
         snapshot: captured,
       });
-      if (outgoing) this.repo.saveProfileSnapshot(outgoing.id, captured);
+      if (outgoing) this.repo.saveProfileSnapshot(outgoing.id, this.profileCopy(captured));
       return this.repo.startJournal({ kind: 'switch', fromProfileId: outgoing?.id ?? null, toProfileId: profileId, rollbackBackupId: backupId });
     });
     this.log.info('Switch started', { journalId, from: outgoing?.id ?? null, to: profileId });
@@ -872,9 +922,13 @@ export class ProfilesService {
   }
 
   /**
-   * Steps 8-10. The library write must succeed (it throws); add-ons and
-   * notifications are best-effort, because throwing after the library has
-   * been swapped would leave the pointer on the wrong profile.
+   * Steps 8-10. The library and add-on writes must succeed: a throw leaves the
+   * journal open, so the page offers Finish (retry) or Go back, and the pointer
+   * never moves onto a profile whose add-ons aren't in Stremio. (Completing with
+   * the old add-ons would save them into the target at the next switch away.)
+   * Notifications are best-effort; when they can't be swapped, the account
+   * remembers that Stremio's aren't the active profile's, so they aren't saved
+   * into it later.
    */
   async applySnapshot(journalId, authKey, live, target) {
     const warnings = [];
@@ -886,16 +940,12 @@ export class ProfilesService {
     this.repo.setJournalPhase(journalId, 'addons');
     const addons = this.prepareAddons(target.addons);
     if (JSON.stringify(addons) !== JSON.stringify(live.addons)) {
-      try {
-        await this.stremio.setAddons(authKey, addons);
-        this.noteAddons(addons);
-      } catch (err) {
-        warnings.push(`Add-ons weren't swapped: ${userMessageOf(err)}`);
-        this.log.warn('Add-on write failed', { journalId, error: err.message });
-      }
+      await this.stremio.setAddons(authKey, addons);
+      this.noteAddons(addons);
     }
 
     this.repo.setJournalPhase(journalId, 'notifs');
+    let notifsSwapped = false;
     if (live.notifs === null) {
       warnings.push("Notifications weren't swapped: Stremio didn't return the current ones.");
     } else if (target.notifs === null) {
@@ -904,11 +954,13 @@ export class ProfilesService {
       const notifs = buildNotifChanges(live.notifs, target.notifs);
       try {
         await this.putChunks(notifs.changes, NOTIF_CHUNK, (c) => this.stremio.putNotifs(authKey, c));
+        notifsSwapped = true;
       } catch (err) {
         warnings.push(`Notifications weren't swapped: ${userMessageOf(err)}`);
         this.log.warn('Notification write failed', { journalId, error: err.message });
       }
     }
+    this.repo.setNotifsForeign(!notifsSwapped);
     return { library: lib.stats, warnings };
   }
 
@@ -1044,9 +1096,9 @@ export class ProfilesService {
 
       // An edit's backup of a profile that isn't in use: undo only puts the
       // profile's saved copy back. Nothing in Stremio changes.
-      if (row.profile_id != null && row.profile_id !== activeId) {
-        const profile = this.repo.getProfile(row.profile_id);
-        if (!profile) throw new UserError('NOT_FOUND', 'The profile this backup belongs to no longer exists.');
+      const backupOf = row.profile_id != null && row.profile_id !== activeId ? this.repo.getProfile(row.profile_id) : null;
+      if (backupOf) {
+        const profile = backupOf;
         this.repo.transaction(() => {
           this.backupProfileBeforeChange(profile.id, `Before undoing an edit of "${profile.name}"`);
           this.repo.saveProfileSnapshot(profile.id, target);
@@ -1098,24 +1150,38 @@ export class ProfilesService {
   exportEverything(passphrase) {
     const account = this.requireAccount();
     const activeId = this.repo.getState()?.active_profile_id;
-    const decode = (row, label) => {
+    // Everything that decrypts goes in as it is, even if it wouldn't pass the checks a
+    // switch makes: the file is for keeping. Only a real decrypt failure is "unreadable".
+    const decode = (row) => {
       try {
-        return decodeSnapshot(this.repo.cipher, row, label);
+        return {
+          library: this.repo.cipher.decryptJson(row.library_enc, 'library'),
+          addons: this.repo.cipher.decryptJson(row.addons_enc, 'addons'),
+          notifs: row.notifs_enc == null ? null : this.repo.cipher.decryptJson(row.notifs_enc, 'notifs'),
+        };
       } catch (err) {
-        if (err instanceof GuardError) return null;
+        if (err instanceof DecryptError) return null;
         throw err;
       }
     };
     const profiles = this.repo.listProfiles().map((p) => {
-      const snap = decode(this.repo.getProfileRow(p.id), p.name);
+      const snap = decode(this.repo.getProfileRow(p.id));
       return {
         name: p.name, avatar_preset: p.avatar_preset, avatar_colour: p.avatar_colour, active: p.id === activeId,
         created_at: p.created_at, snapshot_taken_at: p.snapshot_taken_at,
         ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
       };
     });
+    // Deleted profiles still in the bin, kept in the file (bringing back a file doesn't re-add them).
+    const bin = this.repo.listBin().map((p) => {
+      const snap = decode(this.repo.getBinProfileRow(p.id));
+      return {
+        name: p.name, avatar_preset: p.avatar_preset, avatar_colour: p.avatar_colour, deleted_at: p.deleted_at,
+        ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
+      };
+    });
     const backups = this.repo.listBackups().map((b) => {
-      const snap = decode(this.repo.getBackupRow(b.id), b.label);
+      const snap = decode(this.repo.getBackupRow(b.id));
       return {
         kind: b.kind, label: b.label, created_at: b.created_at,
         ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
@@ -1128,6 +1194,7 @@ export class ProfilesService {
       stremio_email: account.stremio_email,
       profiles,
       backups,
+      bin,
     }, passphrase);
   }
 
@@ -1158,26 +1225,36 @@ export class ProfilesService {
       }
       const prepared = profiles.map((p, i) => ({ p, snap: check(p, `Profile ${i + 1} in the file`) }));
       const preparedBackups = backups.map((b, i) => ({ b, snap: check(b, `Backup ${i + 1} in the file`) }));
-      const keepKinds = new Set(['auto', 'pre_switch', 'pre_restore', 'pre_change', 'manual', 'imported']);
+      const kindNames = { original: 'Setup', auto: 'Daily', pre_switch: 'Before a switch', pre_restore: 'Before a restore', pre_change: 'Before an edit', manual: 'Manual', imported: 'Imported' };
+      const newest = preparedBackups
+        .map((x) => ({ ...x, at: Date.parse(x.b.created_at) || Number(x.b.created_at) || 0 }))
+        .sort((a, b) => b.at - a.at)
+        .slice(0, IMPORT_MAX_BACKUPS);
       let addedProfiles = 0;
       this.repo.transaction(() => {
         for (const { p, snap } of prepared) {
-          let name = this.validateName(p.name);
-          if (this.nameTaken(name)) name = `${name.slice(0, MAX_NAME_LENGTH - 11)} (imported)`;
-          for (let n = 2; this.nameTaken(name); n++) name = `${p.name.slice(0, MAX_NAME_LENGTH - 14)} (imported ${n})`;
+          const base = this.validateName(p.name);
+          let name = base;
+          if (this.nameTaken(name)) name = `${base.slice(0, MAX_NAME_LENGTH - 11)} (imported)`;
+          for (let n = 2; this.nameTaken(name); n++) name = `${base.slice(0, MAX_NAME_LENGTH - 14)} (imported ${n})`;
           const preset = isValidAvatar(p.avatar_preset) ? p.avatar_preset : 'initial';
           const colour = AVATAR_COLOURS.includes(p.avatar_colour) ? p.avatar_colour : DEFAULT_COLOUR;
           this.repo.insertProfile({ name, avatarPreset: preset, avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot: snap });
           addedProfiles++;
         }
-        for (const { b, snap } of preparedBackups) {
-          const kind = keepKinds.has(b.kind) ? b.kind : 'imported';
-          const label = `${String(b.label || 'Backup').slice(0, 60)} (from export)`;
-          this.repo.insertBackup({ kind, label, stremioUserId: account.stremio_user_id, snapshot: snap });
+        for (const { b, snap, at } of newest) {
+          const label = `${kindNames[b.kind] ?? 'Backup'}: ${String(b.label || 'Backup').slice(0, 60)} (from export)`;
+          this.repo.insertBackup({ kind: 'imported', label, stremioUserId: account.stremio_user_id, snapshot: snap, createdAt: at });
         }
       });
-      this.repo.logActivity('import', `Brought back ${addedProfiles} profiles and ${preparedBackups.length} backups from an export`);
-      return { profiles: addedProfiles, backups: preparedBackups.length, skipped: (file.profiles?.length ?? 0) + (file.backups?.length ?? 0) - profiles.length - backups.length };
+      this.repo.pruneBackups();
+      this.repo.logActivity('import', `Brought back ${addedProfiles} profiles and ${newest.length} backups from an export`);
+      return {
+        profiles: addedProfiles,
+        backups: newest.length,
+        olderLeftOut: preparedBackups.length - newest.length,
+        skipped: (file.profiles?.length ?? 0) + (file.backups?.length ?? 0) - profiles.length - backups.length,
+      };
     });
   }
 
@@ -1212,7 +1289,7 @@ export class ProfilesService {
     const id = randomToken(12);
     const now = this.now();
     for (const [key, entry] of this.importStash) if (entry.expiresAt <= now) this.importStash.delete(key);
-    while (this.importStash.size >= 3) this.importStash.delete(this.importStash.keys().next().value);
+    this.importStash.clear();
     this.importStash.set(id, { parsed, expiresAt: now + IMPORT_STASH_MS });
     const { library, addons, notifs } = parsed.snapshot;
     return {
@@ -1247,6 +1324,7 @@ export class ProfilesService {
       let profile = null;
       let clean = null;
       if (asProfile) {
+        this.assertRoomForProfile();
         clean = this.validateName(name ?? suggestedProfileName(parsed.label));
         this.assertNameFree(clean);
         this.validateColour(colour);
@@ -1318,6 +1396,24 @@ export class ProfilesService {
 
   checkLiveSize(live) {
     checkLiveSize(live);
+  }
+
+  /**
+   * A read that looks broken (no add-ons at all, or an empty library for a
+   * profile that has titles) is refused before it can overwrite a saved copy.
+   */
+  assertPlausibleLive(live, profile) {
+    if (live.addons.length === 0) {
+      throw new UserError('EMPTY_READ', "Stremio returned no add-ons for the account, which looks like a bad read. Nothing was changed; try again in a minute.");
+    }
+    if (profile && live.library.length === 0 && profile.library_count > 0) {
+      throw new UserError('EMPTY_READ', `Stremio returned an empty library, but ${profile.name} has ${profile.library_count} titles saved. That looks like a bad read, so nothing was changed; try again in a minute.`);
+    }
+  }
+
+  /** What to save into a profile: notifications that belong to another profile aren't. */
+  profileCopy(captured) {
+    return this.repo.getState()?.notifs_foreign ? { ...captured, notifs: null } : captured;
   }
 
   /** Snapshots are stored exactly as Stremio returned them. Never clean them up: see isCleanTombstone. */

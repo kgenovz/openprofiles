@@ -498,6 +498,7 @@ if (wizard) {
       const tick = li.querySelector('input[name="addon"]');
       tick.checked = false;
       delete tick.dataset.locked;
+      tick.removeAttribute('aria-disabled');
       li.querySelector('[data-lock-badge]').hidden = true;
     }
     for (const ref of start.refs) {
@@ -508,6 +509,7 @@ if (wizard) {
       tick.checked = true;
       if (li.dataset.protected === '1') {
         tick.dataset.locked = '';
+        tick.setAttribute('aria-disabled', 'true');
         li.querySelector('[data-lock-badge]').hidden = false;
       }
     }

@@ -9,7 +9,7 @@ export const BACKUP_RETENTION = {
   pre_restore: 3,
   pre_change: 20,
   manual: 10,
-  imported: 10,
+  imported: 20,
 };
 
 const PROFILE_META = `id, name, avatar_preset, avatar_colour, library_count, addon_count, notif_count,
@@ -82,7 +82,7 @@ export class AccountRepo {
   // ── state (lives on the account row) ─────────────────────────────────────
 
   getState() {
-    return this.db.prepare('SELECT active_profile_id, addon_token, addon_installed FROM accounts WHERE id = ?')
+    return this.db.prepare('SELECT active_profile_id, addon_token, addon_installed, notifs_foreign FROM accounts WHERE id = ?')
       .get(this.accountId) || null;
   }
 
@@ -92,6 +92,11 @@ export class AccountRepo {
 
   setAddonToken(token) {
     this.db.prepare('UPDATE accounts SET addon_token = ? WHERE id = ?').run(token, this.accountId);
+  }
+
+  /** Whether Stremio's notifications belong to some other profile than the active one. */
+  setNotifsForeign(foreign) {
+    this.db.prepare('UPDATE accounts SET notifs_foreign = ? WHERE id = ?').run(foreign ? 1 : 0, this.accountId);
   }
 
   setAddonInstalled(installed) {
@@ -174,8 +179,21 @@ export class AccountRepo {
       WHERE id = ? AND account_id = ? AND deleted_at IS NOT NULL`).get(id, this.accountId) || null;
   }
 
+  /** Includes the encrypted blobs. */
+  getBinProfileRow(id) {
+    return this.db.prepare('SELECT * FROM profiles WHERE id = ? AND account_id = ? AND deleted_at IS NOT NULL')
+      .get(id, this.accountId) || null;
+  }
+
   restoreProfileFromBin(id, name) {
     this.db.prepare('UPDATE profiles SET deleted_at = NULL, name = ? WHERE id = ? AND account_id = ?').run(name, id, this.accountId);
+  }
+
+  /** Keep at most `max` profiles in the bin, removing the longest-deleted first. */
+  trimBin(max) {
+    return this.db.prepare(`DELETE FROM profiles WHERE account_id = ? AND deleted_at IS NOT NULL AND id NOT IN
+      (SELECT id FROM profiles WHERE account_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC LIMIT ?)`)
+      .run(this.accountId, this.accountId, max).changes;
   }
 
   /** Permanently remove bin entries deleted before `before` (ms). Returns how many. */
@@ -204,14 +222,16 @@ export class AccountRepo {
    * `profileId`: for pre_change backups, the profile whose saved state this is (undo puts it back there).
    * `editKind`: for pre_change backups, what the edit was ('addons' | 'cinemeta' | 'undo').
    */
-  insertBackup({ kind, label, stremioUserId, snapshot, profileId = null, editKind = null }) {
+  insertBackup({ kind, label, stremioUserId, snapshot, profileId = null, editKind = null, createdAt = null }) {
     const enc = this.encodeSnapshot(snapshot);
+    const now = this.now();
+    const at = Number.isFinite(createdAt) && createdAt > 0 ? Math.min(createdAt, now) : now;
     const info = this.db.prepare(`INSERT INTO backups
       (account_id, kind, label, library_enc, addons_enc, notifs_enc, library_count, addon_count, notif_count,
        stremio_user_id, created_at, content_hash, profile_id, edit_kind)
       VALUES (@accountId, @kind, @label, @library_enc, @addons_enc, @notifs_enc, @library_count, @addon_count,
        @notif_count, @stremioUserId, @now, @contentHash, @profileId, @editKind)`)
-      .run({ accountId: this.accountId, kind, label, stremioUserId, now: this.now(), contentHash: snapshotHash(snapshot), profileId, editKind, ...enc });
+      .run({ accountId: this.accountId, kind, label, stremioUserId, now: at, contentHash: snapshotHash(snapshot), profileId, editKind, ...enc });
     return Number(info.lastInsertRowid);
   }
 
@@ -222,6 +242,11 @@ export class AccountRepo {
       WHERE b.account_id = ? AND b.kind = 'pre_change' AND b.edit_kind IN ('addons', 'cinemeta')
         AND b.undone_at IS NULL AND b.created_at >= ?
       ORDER BY b.created_at DESC, b.id DESC LIMIT 1`).get(this.accountId, since) || null;
+  }
+
+  /** For an edit's backup: the add-on list the edit wrote. */
+  setAfterHash(id, hash) {
+    this.db.prepare('UPDATE backups SET after_hash = ? WHERE id = ? AND account_id = ?').run(hash, id, this.accountId);
   }
 
   markUndone(id) {

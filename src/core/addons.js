@@ -86,6 +86,24 @@ export function addonDetail(d) {
 
 export const addonsHash = (addons) => crypto.createHash('sha256').update(JSON.stringify(addons)).digest('hex').slice(0, 32);
 
+/** JSON with object keys sorted, so the same data always gives the same text. */
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * What an add-on list amounts to (links, order and manifests), independent of
+ * key order or flags, so a list read back from Stremio compares equal to the
+ * one written.
+ */
+export const addonsFingerprint = (addons) => crypto.createHash('sha256')
+  .update(stableJson((addons || []).map((a) => [a.transportUrl, a.manifest ?? null])))
+  .digest('hex').slice(0, 32);
+
 /** Cinemeta's settings in a list, or null when the list has no stock Cinemeta. */
 export function cinemetaOf(addons) {
   const { index, wrapped, wrappedIndex } = findCinemeta(addons);

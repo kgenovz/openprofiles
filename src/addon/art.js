@@ -210,7 +210,6 @@ export function logoSvg() {
 
 export const renderLogo = () => png(logoSvg());
 export const renderPoster = (opts) => png(posterSvg(opts));
-export const renderAvatarTile = (opts) => png(avatarTileSvg(opts));
 export const renderBackground = (opts) => png(backgroundSvg(opts));
 export const renderClipFrame = (opts) => png(clipFrameSvg(opts));
 

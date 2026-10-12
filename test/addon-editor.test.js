@@ -185,6 +185,32 @@ describe('add-on manager: the profile in use', () => {
     assert.equal(service.latestUndo(), null);
   });
 
+  it("undo refuses when the add-ons changed after the edit, and only the latest edit can be undone", async () => {
+    const { service, fake, original, refs } = await setup();
+    let editor = await service.editableAddons(original.id);
+    const first = await service.saveAddons(original.id, { base: editor.base, refs: refs(editor.addons.filter((a) => a.manifest.name !== 'tmdb')) });
+    editor = await service.editableAddons(original.id);
+    const second = await service.saveAddons(original.id, { base: editor.base, refs: refs(editor.addons.slice().reverse()) });
+    await assert.rejects(service.undoEdit(first.backupId), (e) => e.code === 'NOT_LATEST');
+
+    fake.addons = [...fake.addons, richAddon('installed-in-stremio')];
+    await assert.rejects(service.undoEdit(second.backupId), (e) => e.code === 'CHANGED_SINCE');
+    assert.ok(fake.addons.some((a) => a.manifest.name === 'installed-in-stremio'), 'the add-on installed meanwhile stays');
+
+    // From the Backups tab, putting the add-ons back is still possible on purpose.
+    await service.restoreAddonsFromBackup(first.backupId);
+    assert.ok(fake.addons.some((a) => a.manifest.name === 'tmdb'));
+  });
+
+  it('a timed-out write keeps the backup of the old list', async () => {
+    const { service, repo, fake, original, refs } = await setup();
+    const editor = await service.editableAddons(original.id);
+    fake.failWhen((m) => m === 'addonCollectionSet', { network: true });
+    const before = repo.listBackups().length;
+    await assert.rejects(service.saveAddons(original.id, { base: editor.base, refs: refs(editor.addons.slice().reverse()) }), (e) => e.code === 'WRITE_UNKNOWN');
+    assert.equal(repo.listBackups().length, before + 1);
+  });
+
   it('offers undo for 24 hours', async () => {
     const ctx = await setup();
     const editor = await ctx.service.editableAddons(ctx.kids.id);

@@ -132,14 +132,34 @@ describe('switchTo', () => {
     assert.equal(fake.callCount('datastorePut', 'notifItem'), 0);
   });
 
-  it('an add-on write failure is recorded and the switch still completes', async () => {
-    const { service, repo, fake, kids } = await linkedWithKids();
+  it("an add-on write failure leaves the switch unfinished, so Kids' saved add-ons are never overwritten", async () => {
+    const { service, repo, fake, kids, original } = await linkedWithKids();
     fake.addons.push(addon('extra')); // make the lists differ so a write is needed
-    fake.failWhen((m) => m === 'addonCollectionSet', { error: { code: 99, message: 'nope' } });
-    const result = await service.switchTo(kids.id);
-    assert.match(result.warnings[0], /Add-ons weren't swapped/);
+    const originalAddons = fake.addons.map((a) => a.manifest.id);
+    fake.failWhen((m) => m === 'addonCollectionSet', { error: { code: 99, message: 'nope' } }, { times: 1 });
+    await assert.rejects(service.switchTo(kids.id), (e) => e.code === 'INTERRUPTED');
+    assert.equal(repo.getState().active_profile_id, original.id, 'the pointer did not move');
+    assert.ok(repo.getOpenJournal(), 'Finish / Go back is offered');
+    await service.finishInterrupted();
     assert.equal(repo.getState().active_profile_id, kids.id);
-    assert.deepEqual(repo.recentJournal(1)[0].warnings, result.warnings);
+    assert.notDeepEqual(fake.addons.map((a) => a.manifest.id), originalAddons, "Kids' add-ons are in Stremio now");
+  });
+
+  it("a switch that couldn't swap notifications doesn't save the other profile's into this one", async () => {
+    const { service, repo, fake, kids } = await linkedWithKids();
+    fake.failWhen((m) => m === 'datastoreMeta', { error: { code: 99, message: 'nope' } }, { times: 1 });
+    await service.switchTo(kids.id);
+    assert.equal(repo.getState().notifs_foreign, 1);
+    const before = repo.getProfile(kids.id).notif_count;
+    await service.saveNow();
+    assert.equal(repo.getProfile(kids.id).notif_count, before, "Original's notifications weren't saved into Kids");
+  });
+
+  it('refuses a read that looks broken instead of saving it over a profile', async () => {
+    const { service, repo, fake, original } = await linkedWithKids();
+    fake.library.clear();
+    await assert.rejects(service.saveNow(), (e) => e.code === 'EMPTY_READ');
+    assert.ok(repo.getProfile(original.id).library_count > 0, 'the saved library is untouched');
   });
 
   it('refuses when the live library is over the cap', async () => {

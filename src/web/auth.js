@@ -24,6 +24,9 @@ function parseCookies(header = '') {
 }
 
 const LIMITER_MAX_KEYS = 10000;
+
+/** Requests from the page scripts (they send the CSRF header or JSON) get JSON answers. */
+const wantsJson = (req) => Boolean(req.get('x-csrf-token') || req.get('x-requested-with') || req.is('application/json'));
 const MAX_EMAIL_LENGTH = 254;
 
 /**
@@ -151,8 +154,8 @@ export function createAuth({ db, config, now = () => Date.now() }) {
     require(req, res, next) {
       req.session = loadSession(req);
       if (req.session) return next();
-      if (req.method === 'GET') return res.redirect(303, '/signin');
-      return res.status(401).send('Sign in first.');
+      if (wantsJson(req)) return res.status(401).json({ error: 'You were signed out. Reload the page and sign in again.' });
+      return res.redirect(303, '/signin');
     },
 
     /** Like require, but lets signed-out requests through (for the sign-in page itself). */
@@ -166,7 +169,8 @@ export function createAuth({ db, config, now = () => Date.now() }) {
       // Forms send a hidden field; the import upload (fetch) sends a header.
       const sent = req.get('x-csrf-token') ?? req.body?._csrf;
       if (typeof sent === 'string' && safeEqual(sent, req.session.csrf)) return next();
-      return res.status(403).send('This form expired. Go back, reload the page and try again.');
+      if (wantsJson(req)) return res.status(403).json({ error: 'This page expired. Reload it and try again.' });
+      return res.status(403).type('text').send('This form expired. Go back, reload the page and try again.');
     },
 
     setFlash(req, flash) {

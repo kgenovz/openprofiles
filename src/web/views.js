@@ -269,7 +269,9 @@ function profileCard(p, { active, csrf, locked, editing }) {
         ${active
           ? postButton({ action: `/profiles/${p.id}/save`, csrf, label: html`Save now<span class="sr-only"> ${p.name}</span>`, style: 'grow', disabled: locked })
           : postButton({ action: `/profiles/${p.id}/switch`, csrf, label: html`Switch<span class="sr-only"> to ${p.name}</span>`, style: 'primary grow', disabled: locked })}
-        <a class="button ${editing ? 'is-current' : ''}" href="/profiles/${p.id}#edit" ${editing ? html`aria-current="page"` : ''}>${editing ? 'Editing' : 'Edit'}<span class="sr-only"> ${p.name}</span></a>
+        ${editing
+          ? html`<a class="button is-current" href="/configure" aria-expanded="true">Close<span class="sr-only"> ${p.name}'s editor</span></a>`
+          : html`<a class="button" href="/profiles/${p.id}#edit">Edit<span class="sr-only"> ${p.name}</span></a>`}
       </div>
     </div>
   </article>`;
@@ -305,7 +307,8 @@ function profileEditor(d, { csrf, locked }) {
   const stat = (label, value) => html`<div><dt>${label}</dt><dd>${value}</dd></div>`;
   return html`<section class="editor" id="edit" aria-label="Editing ${p.name}">
     <nav class="editor-nav" aria-label="${p.name}'s sections">
-      <div class="editor-who"><img src="${avatarUrl(p)}" alt="" width="36" height="36"><strong>${p.name}</strong></div>
+      <div class="editor-who"><img src="${avatarUrl(p)}" alt="" width="36" height="36"><strong>${p.name}</strong>
+        <a class="editor-close" href="/configure" aria-label="Close ${p.name}'s editor">×</a></div>
       ${sections.map(([id, label]) => html`<a href="#${id}">${label}</a>`)}
     </nav>
     <div class="editor-body">
@@ -785,9 +788,9 @@ export function backupsPage({ csrf, account, flash, backups, bin = [], undo }) {
             ${items.map((b) => html`<li>
               <span class="list-main"><strong>${b.label}</strong><span class="hint">${when(b.created_at)} · ${counts(b, { notifs: false })}</span></span>
               <span class="actions">
-                <a href="/backups/${b.id}/restore">Restore…</a>
-                <a href="/backups/${b.id}/download">Download</a>
-                ${b.kind === 'original' ? '' : postButton({ action: `/backups/${b.id}/delete`, csrf, label: 'Delete', style: 'link danger', confirm: 'Delete this backup?' })}
+                <a href="/backups/${b.id}/restore">Restore…<span class="sr-only"> ${b.label}</span></a>
+                <a href="/backups/${b.id}/download">Download<span class="sr-only"> ${b.label}</span></a>
+                ${b.kind === 'original' ? '' : postButton({ action: `/backups/${b.id}/delete`, csrf, label: html`Delete<span class="sr-only"> ${b.label}</span>`, style: 'link danger', confirm: 'Delete this backup?' })}
               </span>
             </li>`)}
           </ul>
@@ -800,7 +803,7 @@ export function backupsPage({ csrf, account, flash, backups, bin = [], undo }) {
       ${bin.length ? html`<ul class="list">
         ${bin.map((p) => html`<li>
           <span class="list-main"><strong>${p.name}</strong><span class="hint">deleted ${when(p.deleted_at)}, gone for good ${when(p.purgeAt)}</span></span>
-          ${postButton({ action: `/bin/${p.id}/restore`, csrf, label: 'Bring back' })}
+          ${postButton({ action: `/bin/${p.id}/restore`, csrf, label: html`Bring back<span class="sr-only"> ${p.name}</span>` })}
         </li>`)}
       </ul>` : html`<p class="hint">Empty.</p>`}
     </section>
@@ -810,7 +813,12 @@ export function backupsPage({ csrf, account, flash, backups, bin = [], undo }) {
   });
 }
 
-export function restorePreviewPage({ csrf, backup, active, locked, account }) {
+/**
+ * `backupOf`: the profile (not the one in use) an edit's backup was taken of;
+ * restoring then only changes its saved copy. `addonsOnly`: the backup can put
+ * back just its add-on list (an edit's backup whose profile still exists).
+ */
+export function restorePreviewPage({ csrf, backup, active, locked, account, backupOf = null, addonsOnly = false }) {
   return layout({
     title: 'Restore backup',
     account,
@@ -820,14 +828,19 @@ export function restorePreviewPage({ csrf, backup, active, locked, account }) {
       <h1>Restore this backup?</h1>
       <dl class="compare">
         <dt>Backup</dt><dd>${backup.label}<br><span class="hint">${when(backup.created_at)} · ${counts(backup)}</span></dd>
-        <dt>Replaces</dt><dd>${active ? html`${active.name}<br><span class="hint">last saved ${when(active.snapshot_taken_at)} · ${counts(active)}</span>` : 'the current account state'}</dd>
+        ${backupOf
+          ? html`<dt>Replaces</dt><dd>${backupOf.name}'s saved copy<br><span class="hint">last saved ${when(backupOf.snapshot_taken_at)} · ${counts(backupOf)}</span></dd>`
+          : html`<dt>Replaces</dt><dd>${active ? html`${active.name}<br><span class="hint">last saved ${when(active.snapshot_taken_at)} · ${counts(active)}</span>` : 'the current account state'}</dd>`}
       </dl>
-      <p>The Stremio account's library, add-ons and notifications are replaced with the backup's, and
-        <strong>${active?.name ?? 'the active profile'}</strong> is saved that way. A backup of the current
-        state is taken first, so you can undo this.</p>
+      ${addonsOnly ? html`<p>This backup was taken before an edit. <strong>Putting back only the add-ons</strong> leaves the library and progress as they are now.</p>` : ''}
+      <p>${backupOf
+        ? html`Restoring all of it replaces <strong>${backupOf.name}</strong>'s saved library, add-ons and notifications. Stremio doesn't change, because ${backupOf.name} isn't in use.`
+        : html`Restoring all of it replaces the Stremio account's library, add-ons and notifications, and <strong>${active?.name ?? 'the active profile'}</strong> is saved that way.`}
+        A backup is taken first, so you can undo this.</p>
       ${locked ? html`<div class="flash flash-error">${icon.alert}<p>Resolve the unfinished switch first.</p></div>` : ''}
       <div class="row">
-        ${locked ? '' : postButton({ action: `/backups/${backup.id}/restore`, csrf, label: 'Restore', style: 'primary' })}
+        ${locked ? '' : addonsOnly ? postButton({ action: `/backups/${backup.id}/restore-addons`, csrf, label: 'Put back only the add-ons', style: 'primary' }) : ''}
+        ${locked ? '' : postButton({ action: `/backups/${backup.id}/restore`, csrf, label: addonsOnly ? 'Restore all of it' : 'Restore', style: addonsOnly ? '' : 'primary' })}
         <a class="button" href="/backups">Cancel</a>
       </div>
     </section>`,
@@ -851,9 +864,7 @@ export function installPage({ csrf, account, flash, addon }) {
         <h1 class="h2">Switch from inside Stremio</h1>
         ${status}
       </div>
-      <p class="lede">Installing adds a <strong>Switch profile</strong> row to Stremio's Home. Opening a
-        profile there switches to it; tap its first stream and Stremio refreshes. Every profile keeps the
-        add-on, so the row never disappears.</p>
+      <p class="lede">Adds a <strong>Switch profile</strong> row to Stremio's Home. Every profile keeps it.</p>
       ${addon ? html`<div class="row">
         <a class="button primary" href="${addon.installUrl}">Install in Stremio</a>
         <button type="button" data-copy="${addon.manifestUrl}" data-copied="Copied">Copy add-on link</button>
@@ -912,7 +923,7 @@ export function accountPage({ csrf, account, flash, sessions = [], activity = []
       <ul class="list">
         ${sessions.map((s) => html`<li>
           <span><strong>${deviceName(s.user_agent)}</strong> <span class="hint">· last seen ${ago(s.last_seen_at)}</span></span>
-          ${s.current ? html`<span class="status status-ok">This device</span>` : postButton({ action: `/account/sessions/${s.id}/signout`, csrf, label: 'Sign out', style: 'link' })}
+          ${s.current ? html`<span class="status status-ok">This device</span>` : postButton({ action: `/account/sessions/${s.id}/signout`, csrf, label: html`Sign out<span class="sr-only"> ${deviceName(s.user_agent)}</span>`, style: 'link' })}
         </li>`)}
       </ul>
     </section>

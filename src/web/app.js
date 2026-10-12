@@ -118,9 +118,24 @@ export function createApp({ config, db, accounts, log }) {
   app.get('/signin', auth.optional, (req, res) => {
     const again = req.query.again === '1';
     if (req.session && !again) return res.redirect(303, '/configure');
-    return sendPage(res, signInPage({ again, instance }));
+    const notice = req.query.deleted === '1' ? 'Your OpenProfiles account and everything saved for it were deleted. Your Stremio account is as it was.' : null;
+    return sendPage(res, signInPage({ again, notice, instance }));
   });
-  app.post('/signin', async (req, res) => {
+  const ownOrigin = (() => {
+    try {
+      return new URL(config.publicUrl).origin;
+    } catch {
+      return null;
+    }
+  })();
+  app.post('/signin', async (req, res, next) => {
+    // A sign-in posted from another site would sign this browser into someone else's account.
+    const origin = req.get('origin');
+    if (req.get('sec-fetch-site') === 'cross-site' || (origin && origin !== ownOrigin && origin !== `${req.protocol}://${req.get('host')}`)) {
+      return sendPage(res, signInPage({ error: 'Sign in from this page.', instance }), 403);
+    }
+    return next();
+  }, async (req, res) => {
     const email = String(req.body?.email || '').trim();
     const password = String(req.body?.password || '');
     const limited = auth.checkSignInLimits(req, email);
@@ -154,6 +169,15 @@ export function createApp({ config, db, accounts, log }) {
     auth.logout(req, res);
     res.redirect(303, '/signin');
   });
+
+  // Uploads are parsed in memory, so only one is read at a time across the server.
+  let uploading = false;
+  const oneUpload = (req, res, next) => {
+    if (uploading) return res.status(429).set('Cache-Control', 'no-store').json({ error: 'Another upload is being read right now. Try again in a minute.' });
+    uploading = true;
+    res.on('close', () => { uploading = false; });
+    return next();
+  };
 
   const page = (req, extra = {}) => ({ csrf: req.session.csrf, account: req.service.status().account, flash: auth.takeFlash(req), ...extra });
   const notFound = (res, message) => sendPage(res, errorPage({ status: 404, message }), 404);
@@ -394,7 +418,8 @@ export function createApp({ config, db, accounts, log }) {
   }, '/backups'));
 
   // Step 1 of an import: the page's script uploads the file and gets a summary back.
-  r.post('/import/preview', express.text({ type: '*/*', limit: '64mb' }), (req, res) => {
+  r.post('/import/preview', oneUpload, express.text({ type: '*/*', limit: '64mb' }), (req, res) => {
+    res.set('Cache-Control', 'no-store');
     let raw;
     try {
       raw = JSON.parse(req.body);
@@ -426,7 +451,11 @@ export function createApp({ config, db, accounts, log }) {
     if (!backup) return notFound(res, 'That backup no longer exists.');
     const status = req.service.status();
     const active = status.profiles.find((p) => p.id === status.activeProfileId) || null;
-    return sendPage(res, restorePreviewPage({ csrf: req.session.csrf, backup, active, locked: Boolean(status.openJournal), account: status.account }));
+    const backupOf = backup.profile_id != null && backup.profile_id !== status.activeProfileId ? req.service.repo.getProfile(backup.profile_id) : null;
+    const addonsOnly = backup.kind === 'pre_change' && backup.profile_id != null && Boolean(req.service.repo.getProfile(backup.profile_id));
+    return sendPage(res, restorePreviewPage({
+      csrf: req.session.csrf, backup, active, locked: Boolean(status.openJournal), account: status.account, backupOf, addonsOnly,
+    }));
   });
 
   r.post('/backups/:id/restore', action(async (req) => {
@@ -434,6 +463,12 @@ export function createApp({ config, db, accounts, log }) {
     if (result.profileOnly) return { text: "Put back. Only that profile's saved copy changed; Stremio didn't.", redirect: '/backups' };
     return { text: 'Backup restored. Click back into Stremio and it refreshes (Stremio 5). Other apps: close and reopen them.', details: result.warnings };
   }));
+
+  r.post('/backups/:id/restore-addons', action(async (req) => {
+    const result = await req.service.restoreAddonsFromBackup(idParam(req));
+    if (!result.changed) return { text: `${result.profile.name}'s add-ons were already like that.` };
+    return { text: `Put back ${result.profile.name}'s add-ons${result.active ? ', in Stremio too' : ''}. The library wasn't touched.` };
+  }, '/backups'));
 
   r.post('/bin/:id/restore', action(async (req) => {
     const p = await req.service.restoreFromBin(idParam(req));
@@ -454,13 +489,14 @@ export function createApp({ config, db, accounts, log }) {
   });
 
   // Bring back an "everything" export (the page's script uploads it as JSON).
-  r.post('/import/everything', express.json({ limit: '128mb' }), async (req, res) => {
+  r.post('/import/everything', oneUpload, express.json({ limit: '128mb' }), async (req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
       const { file, passphrase, acceptOtherAccount } = req.body || {};
       const result = await req.service.importEverything(file, { passphrase: passphrase || null, acceptOtherAccount: acceptOtherAccount === true });
       auth.setFlash(req, {
         type: 'ok',
-        text: `Brought back ${result.profiles} profile${result.profiles === 1 ? '' : 's'} and ${result.backups} backup${result.backups === 1 ? '' : 's'}. Nothing in Stremio changed.`,
+        text: `Brought back ${result.profiles} profile${result.profiles === 1 ? '' : 's'} and ${result.backups} backup${result.backups === 1 ? '' : 's'}${result.olderLeftOut ? ` (the newest; ${result.olderLeftOut} older ones stay in the file)` : ''}. Nothing in Stremio changed.`,
         details: result.skipped ? [`${result.skipped} item${result.skipped === 1 ? " couldn't" : "s couldn't"} be read and ${result.skipped === 1 ? 'was' : 'were'} skipped.`] : [],
       });
       return res.json({ ok: true });
@@ -525,7 +561,7 @@ export function createApp({ config, db, accounts, log }) {
     }
     await accounts.deleteAccount(req.session.accountId);
     auth.logout(req, res);
-    return sendPage(res, signInPage({ notice: 'Your OpenProfiles account and everything saved for it were deleted. Your Stremio account is as it was.', instance }));
+    return res.redirect(303, '/signin?deleted=1');
   });
 
   // Picture tiles for the page (banners and the picker). SVG via <img>, so nothing in them runs.

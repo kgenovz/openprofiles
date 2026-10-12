@@ -233,6 +233,15 @@ const MIGRATIONS = [
   ALTER TABLE backups ADD COLUMN edit_kind TEXT;
   ALTER TABLE backups ADD COLUMN undone_at INTEGER;
   `,
+  // Review round, 2026-10-12.
+  //   backups.after_hash        for edits: the add-on list the edit wrote, so undo can tell
+  //                             whether anything changed since (and refuse rather than clobber it)
+  //   accounts.notifs_foreign   1 when Stremio's notifications aren't the active profile's (a
+  //                             switch couldn't swap them), so they aren't saved into it later
+  `
+  ALTER TABLE backups ADD COLUMN after_hash TEXT;
+  ALTER TABLE accounts ADD COLUMN notifs_foreign INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

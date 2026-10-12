@@ -102,6 +102,35 @@ describe('download everything', () => {
     }
   });
 
+  it("bringing back a file never pushes out the account's own backups, and keeps the file's dates", async () => {
+    const source = await linkedWithKids();
+    const file = JSON.parse(JSON.stringify(await source.service.exportEverything(null)));
+    // A file with 20 backups of different days (more than an account keeps of one kind).
+    const one = file.backups[0];
+    file.backups = Array.from({ length: 20 }, (_, i) => ({ ...one, kind: 'auto', label: `Old ${i}`, created_at: Date.parse('2026-09-01T00:00:00Z') + i * 86400000 }));
+    const target = await linkedWithKids();
+    for (let i = 0; i < 3; i++) await target.service.createBackup(`Mine ${i}`);
+    const result = await target.service.importEverything(file, { acceptOtherAccount: true });
+    assert.equal(result.backups, 15, 'the 15 newest from the file');
+    assert.ok(result.olderLeftOut > 0);
+    const mine = target.repo.listBackups().filter((b) => b.kind === 'manual');
+    assert.equal(mine.length, 3, "the account's own manual backups are all still there");
+    const imported = target.repo.listBackups().filter((b) => b.kind === 'imported');
+    assert.ok(imported.every((b) => /\(from export\)$/.test(b.label)));
+    assert.ok(imported.some((b) => b.created_at < Date.now()), 'dates come from the file');
+  });
+
+  it('download everything keeps profiles that decrypt even if they fail the switch checks, and the bin', async () => {
+    const { service, repo, db, kids } = await linkedWithKids();
+    await service.deleteProfile(kids.id);
+    const original = repo.listProfiles()[0];
+    db.prepare('UPDATE profiles SET addons_enc = ?, addon_count = 0 WHERE id = ?').run(repo.cipher.encryptJson([], 'addons'), original.id);
+    const file = await service.exportEverything(null);
+    assert.ok(!file.profiles[0].unreadable, 'an empty add-on list is exported, not dropped');
+    assert.deepEqual(file.profiles[0].addons, []);
+    assert.deepEqual(file.bin.map((p) => p.name), ['Kids']);
+  });
+
   it('refuses a wrong passphrase, and a file from another account unless confirmed', async () => {
     const a = await linkedWithKids();
     const sealed = JSON.parse(JSON.stringify(a.service.exportEverything('right passphrase')));

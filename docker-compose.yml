@@ -13,6 +13,11 @@ services:
       - openprofiles-data:/data                  # database + secret key: back this up
     ports:
       - "127.0.0.1:7000:7000"                    # only the reverse proxy should reach it
+    # Limits, so a misbehaving process can't take the rest of the machine with it.
+    mem_limit: 512m
+    pids_limit: 200
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   openprofiles-data:

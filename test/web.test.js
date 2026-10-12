@@ -128,7 +128,8 @@ describe('web', () => {
     await b.post('/account/delete', { confirm: 'nope' });
     assert.equal(ctx.accounts.accounts.count(), 1, 'not deleted without the confirmation');
     const res = await b.post('/account/delete', { confirm: 'DELETE' });
-    assert.match(res.text, /were deleted/);
+    assert.equal(res.location, '/signin?deleted=1');
+    assert.match((await b.request(res.location)).text, /were deleted/);
     assert.equal(ctx.accounts.accounts.count(), 0);
     assert.equal((await b.request('/configure')).status, 303);
   });

@@ -36,7 +36,6 @@ function main() {
   const key = loadOrCreateKey(config);
   const cipher = new Cipher(key);
   const db = openDatabase(config.dataDir);
-  upgradeLegacyEncryption(db, cipher, log);
   try {
     checkSecretKey(db, key, cipher);
   } catch (err) {
@@ -46,6 +45,7 @@ function main() {
     }
     throw err;
   }
+  upgradeLegacyEncryption(db, cipher, log);
   const stremio = new StremioClient({ baseUrl: config.stremioApiUrl, log });
   const accounts = new AccountsService({ db, cipher, stremio, log, selfAddon: createSelfAddon(config), access: config.access,
     fetchManifest: (url) => fetchManifest(url, { allowPrivate: config.allowPrivateAddons }),

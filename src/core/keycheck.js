@@ -20,12 +20,13 @@ export function checkSecretKey(db, key, cipher) {
     return;
   }
   const sample = db.prepare('SELECT id, auth_key_enc FROM accounts WHERE enc_version = 2 LIMIT 1').get();
-  if (sample) {
-    try {
-      accountCipher(cipher, sample.id).decryptJson(sample.auth_key_enc, 'authkey');
-    } catch {
-      throw new WrongKeyError(wrongKeyMessage());
-    }
+  // Data from before accounts were bound into the encryption (enc_version 1) is checked the old way.
+  const legacy = sample ? null : db.prepare('SELECT auth_key_enc FROM accounts WHERE enc_version = 1 LIMIT 1').get();
+  try {
+    if (sample) accountCipher(cipher, sample.id).decryptJson(sample.auth_key_enc, 'authkey');
+    else if (legacy) cipher.decryptJson(legacy.auth_key_enc, 'authkey');
+  } catch {
+    throw new WrongKeyError(wrongKeyMessage());
   }
   db.prepare("INSERT INTO meta (key, value) VALUES ('key_fingerprint', ?)").run(fingerprint);
 }
