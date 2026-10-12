@@ -889,6 +889,9 @@ const deviceName = (ua = '') => {
   return `${os} · ${browser}`;
 };
 
+const ACTIVITY_SHOWN = 10;
+const activityItem = (a) => html`<li><span class="hint">${when(a.at)}</span><span>${a.detail}</span></li>`;
+
 export function accountPage({ csrf, account, flash, sessions = [], activity = [] }) {
   return layout({
     title: 'Account',
@@ -917,9 +920,11 @@ export function accountPage({ csrf, account, flash, sessions = [], activity = []
 
     <section class="card" id="activity">
       <h2 class="h3">Activity</h2>
-      ${activity.length === 0 ? html`<p class="hint">Nothing yet.</p>` : html`<ul class="activity">
-        ${activity.map((a) => html`<li><span class="hint">${when(a.at)}</span><span>${a.detail}</span></li>`)}
-      </ul>`}
+      ${activity.length === 0 ? html`<p class="hint">Nothing yet.</p>` : html`<ul class="activity">${activity.slice(0, ACTIVITY_SHOWN).map(activityItem)}</ul>
+        ${activity.length > ACTIVITY_SHOWN ? html`<details class="fold">
+          <summary>Show older (${activity.length - ACTIVITY_SHOWN})</summary>
+          <ul class="activity">${activity.slice(ACTIVITY_SHOWN).map(activityItem)}</ul>
+        </details>` : ''}`}
     </section>
 
     <section class="card danger-card" id="delete">

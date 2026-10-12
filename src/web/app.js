@@ -500,7 +500,7 @@ export function createApp({ config, db, accounts, log }) {
   // ── Account tab ────────────────────────────────────────────────────────────
 
   r.get('/account', (req, res) => sendPage(res, accountPage({
-    ...page(req), sessions: auth.listSessions(req), activity: req.service.repo.listActivity(50),
+    ...page(req), sessions: auth.listSessions(req), activity: req.service.repo.listActivity(200),
   })));
 
   // Before the :id route, which would otherwise match "others".
