@@ -6,7 +6,7 @@ import {
 } from './addons.js';
 import {
   CINEMETA_ID, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
-  detailsSource, givesTitleDetails, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
+  detailsSource, givesOwnDetailsOnly, givesTitleDetails, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
 } from './cinemeta.js';
 import { sealExport, openExport } from './exporter.js';
 import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
@@ -407,6 +407,8 @@ export class ProfilesService {
         currentName: details === -1 ? null : nameOf(addons[details]),
         options: addons.filter((a, i) => !isSelfAddon(a) && (i === index || givesTitleDetails(a)))
           .map((a) => ({ ref: addonRef(a), name: nameOf(a) })),
+        // Metadata add-ons for their own titles only (e.g. TMDB with "tmdb:" ids): shown, not pickable.
+        ownTitlesOnly: addons.filter((a) => !isSelfAddon(a) && givesOwnDetailsOnly(a)).map(nameOf),
       },
     };
   }

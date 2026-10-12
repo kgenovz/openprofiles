@@ -215,6 +215,24 @@ export function givesTitleDetails(addon) {
 }
 
 /**
+ * A metadata add-on that only covers its own titles: details pages for movies
+ * or series, but only for its own ids (e.g. TMDB set to "tmdb:" ids), plus
+ * searchable catalogs. Stremio only asks it about titles from its catalogs,
+ * so it can't replace Cinemeta for the library or Cinemeta's rows.
+ */
+export function givesOwnDetailsOnly(addon) {
+  const m = addon?.manifest;
+  if (!isObject(m) || givesTitleDetails(addon)) return false;
+  const types = Array.isArray(m.types) ? m.types : [];
+  const movieOrSeries = resourcesOf(m).some((r) => {
+    if (!isMeta(r)) return false;
+    const own = isObject(r) && Array.isArray(r.types) ? r.types : types;
+    return own.includes('movie') || own.includes('series');
+  });
+  return movieOrSeries && catalogsOf(m).some((c) => searchExtra(c) !== null);
+}
+
+/**
  * A full metadata add-on can do Cinemeta's whole job: details pages for those
  * titles, and catalogs with search. Clones like a ratings wrapper, TMDB and
  * AIOMetadata all are.

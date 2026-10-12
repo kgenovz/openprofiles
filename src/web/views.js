@@ -591,14 +591,16 @@ function metadataCard(p, metadata, { csrf, base }) {
     <p class="hint">${metadata.currentName
       ? html`Details pages (descriptions, cast, episode lists) come from <strong>${metadata.currentName}</strong>.`
       : `No add-on of ${p.name} gives details pages for movies and series, so titles open without them.`}</p>
-    ${metadata.options.length > 1 || (metadata.options.length === 1 && !metadata.current) ? html`<div class="add-by-link">
+    ${metadata.options.length > 1 || (metadata.options.length === 1 && !metadata.current) || metadata.ownTitlesOnly.length ? html`<div class="add-by-link">
       <label class="grow">Get details pages from
         <select name="source" data-current="${metadata.current ?? ''}">
           ${metadata.options.map((o) => html`<option value="${o.ref}" ${o.ref === metadata.current ? 'selected' : ''}>${o.name}</option>`)}
+          ${metadata.ownTitlesOnly.map((name) => html`<option disabled>${name} (only titles from its own catalogs)</option>`)}
         </select></label>
       <button type="submit" data-metadata-go>Change</button>
     </div>
-    <p class="hint">The add-on you pick moves to the top of the list. Cinemeta's own details pages turn off, unless you pick Cinemeta.</p>` : ''}
+    <p class="hint">The add-on you pick moves to the top of the list. Cinemeta's own details pages turn off, unless you pick Cinemeta.</p>
+    ${metadata.ownTitlesOnly.length ? html`<p class="hint">Greyed out: ${metadata.ownTitlesOnly.join(', ')}. These give details pages only for titles from their own catalogs (they use their own ids, not IMDb's), so they can't take over for your library or Cinemeta's rows.</p>` : ''}` : ''}
   </form>`;
 }
 

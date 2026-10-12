@@ -259,8 +259,16 @@ describe('Cinemeta control per profile', () => {
   it("changes where details pages come from: the pick moves to the top and Cinemeta's details go off, or back on", async () => {
     const { service, fake, original, saved } = await setup();
     const aio = richAddon('AIOMetadata', { resources: ['catalog', { name: 'meta', types: ['movie', 'series'], idPrefixes: ['tt', 'tmdb:'] }] });
-    fake.addons = [...fake.addons, aio];
+    const tmdbIds = richAddon('The Movie Database Addon', {
+      resources: ['catalog', 'meta'],
+      catalogs: [{ type: 'movie', id: 'tmdb.search', name: 'Search', extra: [{ name: 'search', isRequired: true }] }],
+    });
+    tmdbIds.manifest.idPrefixes = ['tmdb:'];
+    fake.addons = [...fake.addons, aio, tmdbIds];
     let manager = await service.addonManager(original.id);
+    assert.deepEqual(manager.metadata.ownTitlesOnly, ['The Movie Database Addon'], 'TMDB on tmdb: ids is shown, not offered');
+    const own = manager.addons.find((a) => a.name === 'The Movie Database Addon');
+    await assert.rejects(service.setMetadataSource(original.id, own.ref, { base: manager.base }), (e) => e.code === 'NO_METADATA');
     assert.equal(manager.metadata.currentName, 'Cinemeta', 'stock Cinemeta is first, so it gives details pages');
     assert.deepEqual(manager.metadata.options.map((o) => o.name), ['Cinemeta', 'tmdb', 'Local Files', 'AIOMetadata']);
     const debrid = manager.addons.find((a) => a.name === 'debrid');
