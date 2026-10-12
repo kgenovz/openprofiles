@@ -25,7 +25,7 @@ Things to know:
 
 - **Switching changes every device signed in to the account.** Everyone sees the same profile.
 - **Each profile has its own add-ons**, and its own Cinemeta catalogs (see below).
-- **Refreshing after a switch:** in the Switch profile row, tap the profile's first stream
+- **Refreshing after a switch:** in the Switch profile row, tap the profile's stream
   ("Tap here to refresh Stremio"). Stremio reloads and lands on Home on desktop (after a quick
   hop through the browser), or on your Library on Android (then go back Home). After switching
   from the settings page, just click back into the Stremio window. Apps where that doesn't work
@@ -213,7 +213,6 @@ PUBLIC_URL=http://localhost:7000 DATA_DIR=./data-dev \
   STREMIO_API_URL=http://localhost:7001 npm run dev
 ```
 
-`scripts/make-clips.js` regenerates the two short clips Stremio shows after a switch, and
 `scripts/render-art-preview.js` writes sample posters for a visual check.
 
 Design notes and decisions live in [PLAN.md](PLAN.md).

@@ -122,6 +122,17 @@ describe('switchTo', () => {
     assert.equal(fake.callCount('datastorePut'), 0);
   });
 
+  it("a switch clears the switcher's own entries out of Continue Watching", async () => {
+    const { service, fake, kids, original } = await linkedWithKids();
+    // Left by playing the old reminder clip: an OpenProfiles item with progress.
+    fake.seed({ library: [libItem(`openprofiles:${kids.id}`, { type: 'OpenProfiles', timeOffset: 4000, temp: true })] });
+    await service.switchTo(kids.id);
+    await service.switchTo(original.id);
+    const item = fake.library.get(`openprofiles:${kids.id}`);
+    assert.equal(item.removed, true);
+    assert.equal(item.state.timeOffset, 0, 'gone from Continue Watching');
+  });
+
   it('a failed notification read keeps the saved notifications and skips the notification swap', async () => {
     const { service, repo, fake, kids, original } = await linkedWithKids();
     fake.failWhen((m) => m === 'datastoreMeta', { error: { code: 99, message: 'nope' } });

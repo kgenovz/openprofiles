@@ -17,7 +17,6 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json LICENSE ./
 COPY src ./src
-COPY assets ./assets
 RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME /data

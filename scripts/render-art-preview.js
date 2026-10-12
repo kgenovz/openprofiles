@@ -1,7 +1,7 @@
-// Writes sample posters, backgrounds and clip frames to ./art-preview/ for a visual check.
+// Writes sample posters and backgrounds to ./art-preview/ for a visual check.
 import fs from 'node:fs';
 import path from 'node:path';
-import { renderBackground, renderClipFrame, renderPoster } from '../src/addon/art.js';
+import { renderBackground, renderPoster } from '../src/addon/art.js';
 
 const out = path.resolve(process.argv[2] || 'art-preview');
 fs.mkdirSync(out, { recursive: true });
@@ -16,6 +16,4 @@ for (const [i, s] of samples.entries()) {
   fs.writeFileSync(path.join(out, `poster-${i}.png`), await renderPoster(s));
 }
 fs.writeFileSync(path.join(out, 'background.png'), await renderBackground(samples[1]));
-fs.writeFileSync(path.join(out, 'clip-switching.png'), await renderClipFrame({ kind: 'switching' }));
-fs.writeFileSync(path.join(out, 'clip-error.png'), await renderClipFrame({ kind: 'error' }));
 console.log(`Wrote previews to ${out}`);

@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { isBust, pictureSvg } from './avatars.js';
 
 /**
- * Poster, background and clip-frame artwork, drawn as SVG paths from bundled
+ * Poster and background artwork, drawn as SVG paths from bundled
  * Figtree glyphs and rasterised with sharp. Using glyph paths (not SVG text)
  * means the output doesn't depend on whatever fonts the container has.
  * Specs: the "Poster tiles" and "Clips" artboards in the M2 design canvas.
@@ -169,33 +169,6 @@ export function backgroundSvg({ name, colour, avatar = 'initial' }) {
   ].join(''));
 }
 
-/** 1280×720 still for the switching / error clips. */
-export function clipFrameSvg({ kind }) {
-  const W = 1280;
-  const H = 720;
-  const ok = kind === 'switching';
-  const title = ok ? 'Profile switched' : "Couldn't switch";
-  const sub = ok
-    ? ['Close and reopen Stremio to see it.']
-    : ['The reason is under the stream in the list.', 'The OpenProfiles page has the details.'];
-  const r = 87;
-  const subLineH = 57;
-  const blockH = 2 * r + 45 + 84 + 45 + sub.length * subLineH;
-  const top = (H - blockH) / 2;
-  const cy = top + r;
-  const titleY = top + 2 * r + 45 + 42;
-  const icon = ok
-    ? `<path d="M${W / 2 - 34},${cy + 2}l25,25l45,-47" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>`
-    : `<path d="M${W / 2},${cy - 35}v35M${W / 2},${cy + 33}v1" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round"/>`;
-  return svgDoc(W, H, [
-    `<rect width="${W}" height="${H}" fill="#0f0f14"/>`,
-    `<circle cx="${W / 2}" cy="${cy}" r="${r}" fill="${ok ? '#8b6dff' : '#e5484d'}"/>`,
-    icon,
-    `<path d="${centredLine(title, 800, 70, W / 2, titleY)}" fill="#ffffff"/>`,
-    ...sub.map((line, i) => `<path d="${centredLine(line, 500, 41, W / 2, titleY + 42 + 45 + subLineH / 2 + i * subLineH)}" fill="#c4c4cf"/>`),
-  ].join(''));
-}
-
 /** Add-on logo: two people on the brand violet. */
 export function logoSvg() {
   const W = 256;
@@ -211,7 +184,6 @@ export function logoSvg() {
 export const renderLogo = () => png(logoSvg());
 export const renderPoster = (opts) => png(posterSvg(opts));
 export const renderBackground = (opts) => png(backgroundSvg(opts));
-export const renderClipFrame = (opts) => png(clipFrameSvg(opts));
 
 /** Small in-memory cache: artwork only changes when a name, colour or active flag does. */
 export class ArtCache {

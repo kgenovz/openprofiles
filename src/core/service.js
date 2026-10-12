@@ -20,7 +20,7 @@ import {
 import { Mutex } from './lock.js';
 import { snapshotHash } from './repo.js';
 import { isValidAvatar } from '../addon/avatars.js';
-import { ADDON_ID, ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
+import { ADDON_ID, ID_PREFIX, ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
 
 // Each clears 3.5:1 under a white initial (see the poster artboard in the M2 design).
 export const AVATAR_COLOURS = ['#e5484d', '#e05d0c', '#b7790b', '#3b8f4b', '#0f8f80', '#0a7fe0', '#8e4ec6', '#d6409f'];
@@ -934,7 +934,8 @@ export class ProfilesService {
     const warnings = [];
 
     this.repo.setJournalPhase(journalId, 'library');
-    const lib = buildLibraryChanges(live.library, target.library, this.now());
+    const library = target.library.filter((it) => !String(it._id).startsWith(ID_PREFIX));
+    const lib = buildLibraryChanges(live.library, library, this.now());
     await this.putChunks(lib.changes, LIBRARY_CHUNK, (c) => this.stremio.putLibrary(authKey, c));
 
     this.repo.setJournalPhase(journalId, 'addons');

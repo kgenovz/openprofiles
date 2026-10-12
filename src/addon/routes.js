@@ -43,7 +43,7 @@ function artVersion(...parts) {
 }
 
 /**
- * The add-on Stremio talks to. Every route but the logo and clips sits under
+ * The add-on Stremio talks to. Every route but the logo sits under
  * the secret token, because opening a profile's stream switches the account.
  */
 export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_MS }) {
@@ -93,13 +93,11 @@ export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_
   // (types/resource/stream.rs), so sending both is a duplicate field: the
   // stream fails to parse, is skipped, and Stremio says "No streams were found".
   // Key line first: phones truncate.
-  function stream(description, clip = 'switching.mp4') {
-    return {
-      name: 'OpenProfiles',
-      description,
-      url: `${publicUrl}/clips/${clip}`,
-      behaviorHints: { notWebReady: true },
-    };
+  // No stream ever plays a video: anything played lands in Continue Watching.
+
+  /** A problem: tapping it opens the OpenProfiles page, where it can be fixed. */
+  function pageStream(description) {
+    return { name: 'OpenProfiles', description, externalUrl: `${publicUrl}/configure` };
   }
 
   /**
@@ -183,7 +181,7 @@ export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_
     noStore(res);
     const id = parseProfileMetaId(req.params.id);
     const p = id && service.repo.getProfile(id);
-    if (!p) return res.json({ streams: [stream("Couldn't switch: that profile no longer exists.", 'switch-error.mp4')] });
+    if (!p) return res.json({ streams: [pageStream("Couldn't switch: that profile no longer exists.\nTap to open OpenProfiles.")] });
 
     const work = service.switchTo(id);
     const outcome = await Promise.race([
@@ -193,11 +191,11 @@ export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_
 
     if (outcome.pending) {
       work.catch(() => {}); // the service has already logged and journaled it
-      return res.json({ streams: [stream(`Still switching to ${p.name}\nWait a minute, then close and reopen Stremio.`)] });
+      return res.json({ streams: [refreshStream(`Still switching to ${p.name}\nWait a few seconds, then tap here to refresh.`, req.get('user-agent'))] });
     }
     if (outcome.error) {
       if (!outcome.error.userMessage) log.error('Switch from Stremio failed', { error: outcome.error.message });
-      return res.json({ streams: [stream(`Couldn't switch: ${userMessageOf(outcome.error)}`, 'switch-error.mp4')] });
+      return res.json({ streams: [pageStream(`Couldn't switch: ${userMessageOf(outcome.error)}\nTap to open OpenProfiles.`)] });
     }
     const { result } = outcome;
     const lines = result.alreadyActive
@@ -205,10 +203,7 @@ export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_
       : [`Switched to ${p.name}`, 'Tap here to refresh Stremio.'];
     if (result.warnings?.length) lines.push("Some parts didn't switch. The OpenProfiles page has details.");
     return res.json({
-      streams: [
-        refreshStream(lines.join('\n'), req.get('user-agent')),
-        stream("Didn't refresh? Close and reopen Stremio.\nThis clip is just a reminder."),
-      ],
+      streams: [refreshStream(lines.join('\n'), req.get('user-agent'))],
     });
   }));
 

@@ -155,11 +155,11 @@ describe('add-on routes', () => {
     for (const s of first.body.streams) {
       assert.equal(s.title, undefined, 'stremio-core treats title as description: both = duplicate field = "No streams were found"');
     }
-    const [refresh, clip] = first.body.streams;
+    assert.equal(first.body.streams.length, 1);
+    const [refresh] = first.body.streams;
     assert.match(refresh.description, /^Switched to Kids/);
     assert.equal(refresh.externalUrl, 'stremio:///library', 'no browser user agent (the Android app): deep link straight back in');
-    assert.equal(clip.url, `${PUBLIC_URL}/clips/switching.mp4`);
-    assert.equal(clip.behaviorHints.notWebReady, true);
+    assert.ok(first.body.streams.every((s) => !s.url), 'nothing plays, so nothing lands in Continue Watching');
 
     const puts = ctx.fake.calls.length;
     const again = await get(path);
@@ -171,21 +171,20 @@ describe('add-on routes', () => {
     assert.equal(ctx.fake.calls.length, puts + 0, 'already active: no Stremio calls');
   });
 
-  it('errors come back as a stream with the reason first and the error clip', async () => {
+  it('errors come back as a stream with the reason first, opening the OpenProfiles page', async () => {
     const original = ctx.repo.listProfiles().find((p) => p.name === 'Original');
     ctx.fake.failWhen((m) => m === 'getUser', { status: 529 });
     const { body } = await get(`/${token}/stream/${CATALOG_TYPE}/openprofiles:${original.id}.json`);
     ctx.fake.rules = [];
     assert.match(body.streams[0].description, /^Couldn't switch: Stremio is busy/);
-    assert.match(body.streams[0].url, /switch-error\.mp4$/);
+    assert.equal(body.streams[0].externalUrl, `${PUBLIC_URL}/configure`);
+    assert.equal(body.streams[0].url, undefined);
   });
 
-  it('serves posters, the logo and the clips', async () => {
+  it('serves posters and the logo', async () => {
     const poster = await fetch(`${base}/${token}/poster/${ctx.kids.id}.png`);
     assert.equal(poster.headers.get('content-type'), 'image/png');
     assert.equal((await fetch(`${base}/logo.png`)).status, 200);
-    const clip = await fetch(`${base}/clips/switching.mp4`, { headers: { range: 'bytes=0-99' } });
-    assert.equal(clip.status, 206, 'range requests work for players');
   });
 
   it('a slow switch answers "still switching" and finishes in the background', async () => {

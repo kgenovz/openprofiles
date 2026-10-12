@@ -14,7 +14,6 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = path.join(HERE, 'static');
-const CLIPS_DIR = path.join(HERE, '..', '..', 'assets', 'clips');
 const FONTS_DIR = path.dirname(createRequire(import.meta.url).resolve('@fontsource/figtree/package.json'));
 
 function securityHeaders(req, res, next) {
@@ -72,10 +71,6 @@ export function createApp({ config, db, accounts, log }) {
   app.use(securityHeaders);
   app.use('/static', express.static(STATIC_DIR, { maxAge: '1h', index: false }));
   app.use('/fonts', express.static(FONTS_DIR, { maxAge: '30d', index: false, extensions: false }));
-  app.use('/clips', (req, res, next) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    next();
-  }, express.static(CLIPS_DIR, { maxAge: '7d', index: false }));
   app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
   const sendPage = (res, page, status = 200) => {
