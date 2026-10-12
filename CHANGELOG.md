@@ -5,6 +5,8 @@
 - **Watching on another device during a switch:** the title's progress goes to the profile that
   was watching, not the one switched to, and the title leaves the new profile's Continue Watching
   about 10 minutes after playback stops.
+- The example compose file follows the `1` image, so `docker compose pull` brings every 1.x
+  release, not only 1.0.x fixes.
 
 ## 1.0.1 (2026-10-12)
 

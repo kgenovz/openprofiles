@@ -1,6 +1,6 @@
 name: Docker image
 
-# Publishes ghcr.io/<owner>/openprofiles: `latest` from main, and `X.Y.Z` / `X.Y`
+# Publishes ghcr.io/<owner>/openprofiles: `latest` from main, and `X.Y.Z` / `X.Y` / `X`
 # from version tags (git tag v1.0.0 && git push origin v1.0.0).
 on:
   push:
@@ -32,6 +32,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=sha,format=short
       - uses: docker/build-push-action@v6
         with:

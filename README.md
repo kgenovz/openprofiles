@@ -149,8 +149,8 @@ checks the key against the data when it starts and refuses a mismatch.
 docker compose pull && docker compose up -d
 ```
 
-The example compose file follows `1.0`, so this brings fixes (1.0.x). For a new minor version,
-change the image tag. Database changes are applied on start, and each release says in
+The example compose file follows `1`, so this brings every 1.x release (new features and
+fixes). A 2.0 would need changes by hand, and would only come with a new tag. Database changes are applied on start, and each release says in
 [CHANGELOG.md](CHANGELOG.md) if anything needs doing by hand.
 
 ## Running the server
