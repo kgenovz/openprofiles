@@ -248,12 +248,33 @@ describe('Cinemeta control per profile', () => {
     assert.equal(manager.cinemeta.wrappedName, 'Cinemeta with Ratings');
     assert.ok(manager.addons.find((a) => a.name === 'Cinemeta with Ratings').wrapsCinemeta);
 
-    await service.saveCinemeta(original.id, 'wrapper', { base: manager.base });
+    assert.equal(manager.cinemeta.detailsFrom.name, 'Cinemeta', 'stock Cinemeta is first, so it gives details pages');
+    assert.deepEqual(manager.cinemeta.handoffs.map((h) => h.name), ['Cinemeta with Ratings']);
+    await service.saveCinemeta(original.id, { handoff: manager.cinemeta.wrappedRef }, { base: manager.base });
     const stock = saved(original.id).addons.find((a) => a.manifest.id === 'com.linvo.cinemeta');
     assert.deepEqual(deriveSettings(stock.manifest), { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true });
     assert.ok(stock.manifest.catalogs.some((c) => c.id === 'calendar-videos'), 'calendar catalogs stay');
     const live = fake.addons.find((a) => a.manifest.id === 'com.linvo.cinemeta.ratings-wrapper');
     assert.equal(live.manifest.catalogs.length, 8, "the wrapper's own copy is untouched");
+  });
+
+  it('can hand Cinemeta\'s job to a full metadata add-on like AIOMetadata, and not to one that only streams', async () => {
+    const { service, fake, original, saved } = await setup();
+    const aio = richAddon('AIOMetadata', {
+      resources: ['catalog', { name: 'meta', types: ['movie', 'series'], idPrefixes: ['tt', 'tmdb:'] }],
+      catalogs: [{ type: 'movie', id: 'aio.search', name: 'Search', extra: [{ name: 'search', isRequired: true }] }],
+    });
+    fake.addons = [...fake.addons, aio];
+    let manager = await service.addonManager(original.id);
+    assert.deepEqual(manager.cinemeta.handoffs.map((h) => h.name), ['AIOMetadata']);
+    const debrid = manager.addons.find((a) => a.name === 'debrid');
+    await assert.rejects(service.saveCinemeta(original.id, { handoff: debrid.ref }, { base: manager.base }), (e) => e.code === 'NO_HANDOFF');
+
+    await service.saveCinemeta(original.id, { handoff: manager.cinemeta.handoffs[0].ref }, { base: manager.base });
+    const stock = saved(original.id).addons[0].manifest;
+    assert.deepEqual(deriveSettings(stock), { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true });
+    manager = await service.addonManager(original.id);
+    assert.equal(manager.cinemeta.detailsFrom.name, 'tmdb', 'now the first add-on with details pages is TMDB');
   });
 
   it('reset puts the stock manifest back exactly', async () => {

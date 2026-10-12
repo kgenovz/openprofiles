@@ -510,6 +510,8 @@ input[role="switch"]:checked::after { transform: translateX(22px); }
 .warn[hidden] { display: none; }
 .warn svg { flex: none; margin-top: 2px; }
 .stack-sm { display: grid; gap: 6px; justify-items: start; }
+.handoff { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 14px; }
+.handoff p { margin: 0; }
 .warn button.link { color: inherit; font-weight: 700; }
 
 /* The wizard */

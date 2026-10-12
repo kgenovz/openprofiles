@@ -197,35 +197,55 @@ export function buildManifest({ current, stock = null, settings }) {
 }
 
 /**
- * Settings that leave Cinemeta's job to a wrapped copy: stock Cinemeta's rows
- * off, and its search and details pages off too wherever the wrapper gives
- * them (so search results and details pages aren't doubled either).
+ * Does this add-on give details pages for the titles Cinemeta covers: movies or
+ * series with IMDb ids ("tt…")? A resource may set its own types and id
+ * prefixes; otherwise the manifest's apply, and no prefixes means any id.
  */
-export function settingsForWrapper(wrapper) {
-  const m = wrapper?.manifest;
+export function givesTitleDetails(addon) {
+  const m = addon?.manifest;
+  if (!isObject(m)) return false;
+  const types = Array.isArray(m.types) ? m.types : [];
+  return resourcesOf(m).some((r) => {
+    if (!isMeta(r)) return false;
+    const own = isObject(r) && Array.isArray(r.types) ? r.types : types;
+    const prefixes = isObject(r) && Array.isArray(r.idPrefixes) ? r.idPrefixes : Array.isArray(m.idPrefixes) ? m.idPrefixes : null;
+    const imdb = !prefixes || prefixes.some((p) => typeof p === 'string' && 'tt0000001'.startsWith(p));
+    return imdb && (own.includes('movie') || own.includes('series'));
+  });
+}
+
+/**
+ * A full metadata add-on can do Cinemeta's whole job: details pages for those
+ * titles, and catalogs with search. Clones like a ratings wrapper, TMDB and
+ * AIOMetadata all are.
+ */
+export function isFullMetadata(addon) {
+  return givesTitleDetails(addon) && catalogsOf(addon.manifest).some((c) => searchExtra(c) !== null);
+}
+
+/** Index of the add-on Stremio takes details pages from: the first in the list that gives them (-1: none). */
+export function detailsSource(addons) {
+  return (addons || []).findIndex(givesTitleDetails);
+}
+
+/**
+ * Settings that hand Cinemeta's job to another add-on: stock Cinemeta's rows
+ * off, and its search and details pages off too wherever that add-on gives
+ * them (so search results and details pages come from it alone).
+ */
+export function settingsForHandoff(addon) {
   return {
     hidePopular: true,
     hideNew: true,
     hideFeatured: true,
-    removeSearch: catalogsOf(m).some((c) => searchExtra(c) !== null),
-    removeMeta: anotherAddonServesMeta([wrapper], -1),
+    removeSearch: catalogsOf(addon?.manifest).some((c) => searchExtra(c) !== null),
+    removeMeta: givesTitleDetails(addon),
   };
 }
 
 /** Does any other add-on in the list give details pages for movies or series? */
 export function anotherAddonServesMeta(addons, cinemetaIndex) {
-  return (addons || []).some((a, i) => {
-    if (i === cinemetaIndex || !isObject(a?.manifest)) return false;
-    const types = Array.isArray(a.manifest.types) ? a.manifest.types : [];
-    return resourcesOf(a.manifest).some((r) => {
-      if (r === 'meta') return types.includes('movie') || types.includes('series');
-      if (isObject(r) && r.name === 'meta') {
-        const own = Array.isArray(r.types) ? r.types : types;
-        return own.includes('movie') || own.includes('series');
-      }
-      return false;
-    });
-  });
+  return (addons || []).some((a, i) => i !== cinemetaIndex && givesTitleDetails(a));
 }
 
 /** One line for the profile page, e.g. "Popular shown; New and Featured hidden; search on; details pages on." */

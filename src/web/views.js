@@ -635,8 +635,20 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
             name: cinemeta.wrappedName,
             profile: p.name,
             hidden: cinemeta.settings.hidePopular && cinemeta.settings.hideNew && cinemeta.settings.hideFeatured,
-            action: html`<button type="submit" name="preset" value="wrapper" class="link">Let ${cinemeta.wrappedName} show them instead</button>`,
+            action: html`<button type="submit" name="handoff" value="${cinemeta.wrappedRef}" class="link">Let ${cinemeta.wrappedName} show them instead</button>`,
           }) : ''}
+          ${cinemeta.detailsFrom ? html`<p class="hint">Details pages come from <strong>${cinemeta.detailsFrom.name}</strong>, the first add-on in the list that gives them. Move add-ons up or down to change that.</p>` : ''}
+          ${cinemeta.handoffs.length ? html`<div class="handoff">
+            <div class="add-by-link">
+              <label class="grow">Hand Cinemeta's job to
+                <select name="handoff">
+                  <option value="">Keep Cinemeta</option>
+                  ${cinemeta.handoffs.map((h) => html`<option value="${h.ref}">${h.name}</option>`)}
+                </select></label>
+              <button type="submit">Hand over</button>
+            </div>
+            <p class="hint">Turns off Cinemeta's own catalogs, search and details pages, so they come from that add-on alone.</p>
+          </div>` : ''}
           <div class="row spread">
             <button type="submit" formaction="/profiles/${p.id}/cinemeta/reset" data-confirm-click="Put Cinemeta back exactly as Stremio ships it?">Reset to Stremio's default</button>
             <button type="submit" class="primary">Save</button>

@@ -6,7 +6,7 @@ import {
 } from './addons.js';
 import {
   CINEMETA_ID, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
-  needsStock, sameSettings, settingsForWrapper,
+  detailsSource, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
 } from './cinemeta.js';
 import { sealExport, openExport } from './exporter.js';
 import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
@@ -383,6 +383,8 @@ export class ProfilesService {
     const own = new Set(addons.map(addonRef));
     const others = addonPool(this.savedAddonLists({ skip: profileId }));
     const { index, wrapped, wrappedIndex } = findCinemeta(addons);
+    const nameOf = (a) => String(a.manifest?.name || a.manifest?.id || 'Another add-on');
+    const details = detailsSource(addons);
     return {
       profile,
       active,
@@ -393,9 +395,15 @@ export class ProfilesService {
       cinemeta: {
         present: index !== -1,
         wrapped,
-        wrappedName: wrapped ? String(addons[wrappedIndex].manifest?.name || 'Another add-on') : null,
+        wrappedName: wrapped ? nameOf(addons[wrappedIndex]) : null,
+        wrappedRef: wrapped ? addonRef(addons[wrappedIndex]) : null,
         settings: index === -1 ? null : deriveSettings(addons[index].manifest),
         otherMeta: anotherAddonServesMeta(addons, index),
+        // Where details pages come from: the first add-on in the list that gives them.
+        detailsFrom: details === -1 ? null : { name: nameOf(addons[details]), cinemeta: details === index },
+        // Add-ons that can take over Cinemeta's whole job (clones, TMDB, AIOMetadata…).
+        handoffs: addons.filter((a, i) => i !== index && !isSelfAddon(a) && (isFullMetadata(a) || i === wrappedIndex))
+          .map((a) => ({ ref: addonRef(a), name: nameOf(a) })),
       },
     };
   }
@@ -425,11 +433,10 @@ export class ProfilesService {
     });
   }
 
-  /** Change how Cinemeta behaves in one profile (settings from cinemeta.js). */
   /**
-   * Change how Cinemeta behaves in one profile (settings from cinemeta.js).
-   * `'wrapper'` instead of settings hands Cinemeta's job to the wrapped copy in
-   * the list (see settingsForWrapper), so nothing shows twice.
+   * Change how Cinemeta behaves in one profile: `wanted` is settings (from
+   * cinemeta.js), or `{ handoff: ref }` to hand Cinemeta's job to another
+   * add-on of the list (see settingsForHandoff).
    */
   saveCinemeta(profileId, wanted, { base }) {
     return this.editAddons(profileId, {
@@ -439,14 +446,21 @@ export class ProfilesService {
       change: async (current, profile) => {
         const { index, wrappedIndex } = findCinemeta(current);
         if (index === -1) throw new UserError('NO_CINEMETA', `${profile.name} doesn't have Cinemeta, so there's nothing to change.`);
-        if (wanted === 'wrapper' && wrappedIndex === -1) {
-          throw new UserError('NO_WRAPPER', `${profile.name} has no other copy of Cinemeta to hand the catalogs to.`);
+        let settings = wanted;
+        let taker = null;
+        if (wanted?.handoff) {
+          const i = current.findIndex((a) => addonRef(a) === wanted.handoff);
+          if (i === -1 || i === index || !(isFullMetadata(current[i]) || i === wrappedIndex)) {
+            throw new UserError('NO_HANDOFF', `That add-on can't take over Cinemeta's job in ${profile.name}. Reload the page and try again.`);
+          }
+          taker = current[i];
+          settings = settingsForHandoff(taker);
         }
-        const settings = wanted === 'wrapper' ? settingsForWrapper(current[wrappedIndex]) : wanted;
         const warnings = [];
         const addons = await this.applyCinemeta(current, settings, warnings);
         const what = describeChanges(deriveSettings(current[index].manifest), settings);
-        return { addons, warnings, activity: `Changed ${profile.name}'s Cinemeta: ${what.join(', ') || 'no change'}` };
+        const why = taker ? ` (handed to ${taker.manifest?.name || 'another add-on'})` : '';
+        return { addons, warnings, activity: `Changed ${profile.name}'s Cinemeta${why}: ${what.join(', ') || 'no change'}` };
       },
     });
   }
