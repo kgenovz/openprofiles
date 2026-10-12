@@ -17,7 +17,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json LICENSE ./
 COPY src ./src
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data && chown node:node /data && chmod 700 /data
 USER node
 VOLUME /data
 EXPOSE 7000

@@ -2,7 +2,7 @@
 # Put it behind a reverse proxy such as Caddy; see README.md.
 services:
   openprofiles:
-    image: ghcr.io/kgenovz/openprofiles:latest
+    image: ghcr.io/kgenovz/openprofiles:1.0   # 1.0.x fixes; change for a new minor version
     container_name: openprofiles
     restart: unless-stopped
     environment:

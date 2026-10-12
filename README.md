@@ -10,8 +10,13 @@ affiliated with Stremio. To try it first, there's a free shared server at
 [privacy page](https://openprofiles.kgenovz.com/privacy) says what it keeps. Running your own is
 recommended: it's light, and then your add-on links never leave your hands.
 
+![The Profiles page: four profiles, each with its own picture and colour](docs/screenshots/profiles.png)
+
 > **Have Stremio Supporter?** Use Stremio's own profiles instead. They work on several devices
 > at the same time; OpenProfiles can't.
+
+**Tested on** Stremio for Windows, Android phones and Android TV. Not tested yet: macOS and
+Linux desktop, the web app and iOS. If you try one, an issue saying how it went helps.
 
 ## How it works
 
@@ -57,6 +62,7 @@ https.
    | `ACCESS` | no | Who can sign in. `owner` (default): the first Stremio account to sign in owns the server. `list`: only `ALLOWED_ACCOUNTS`. `open`: anyone (a shared instance) |
    | `ALLOWED_ACCOUNTS` | with `list` | Stremio emails or user ids, comma-separated |
    | `MAX_ACCOUNTS` | no | With `open`, the most accounts the server takes |
+   | `REMOVE_UNUSED_DAYS` | no | With `open`, accounts nobody uses for this many days are removed, so they don't hold places forever (default `90`; `0` never). Used means signed in, visited the pages, or Stremio asked its add-on for anything. The owner and `ADMINS` are never removed |
    | `LOG_LEVEL` | no | `error`, `warn`, `info` (default) or `debug` |
    | `SECRET_KEY` | no | 32-byte key (64 hex chars) instead of the generated `/data/secret.key` |
    | `PORT` | no | Port inside the container (default `7000`) |
@@ -66,8 +72,8 @@ https.
    | `PRIVACY_NOTE` | no | One more line for the privacy page about your setup, e.g. `The web proxy keeps no access logs.` |
    | `ADMINS` | no | Stremio emails or user ids that may use the **Server** tab besides the owner (the first account to sign in) |
 
-   `ACCESS`, `ALLOWED_ACCOUNTS`, `MAX_ACCOUNTS`, `LOG_LEVEL`, `OPERATOR` and `PRIVACY_NOTE` are
-   starting values: the **Server** tab can change each of them later without a restart (see
+   `ACCESS`, `ALLOWED_ACCOUNTS`, `MAX_ACCOUNTS`, `REMOVE_UNUSED_DAYS`, `LOG_LEVEL`, `OPERATOR`
+   and `PRIVACY_NOTE` are starting values: the **Server** tab can change each of them later without a restart (see
    [Running the server](#running-the-server)).
 
 2. Put it behind a reverse proxy that handles https. With [Caddy](https://caddyserver.com):
@@ -78,6 +84,9 @@ https.
    }
    ```
 
+   If Caddy runs in Docker too, put both containers on one Docker network and use
+   `reverse_proxy openprofiles:7000`.
+
 3. `docker compose up -d` and open `https://profiles.example.com`.
 4. **Sign in with your Stremio email and password.** There's no separate password: your
    Stremio account is your OpenProfiles account. The password is sent to Stremio once to get a
@@ -87,6 +96,8 @@ https.
 5. **New profile** opens a short wizard: name, picture and colour; what it starts with (an empty
    library, a copy of the account, or a copy of another profile); which add-ons it has and in what
    order; and which Cinemeta catalogs it shows. Nothing in Stremio changes until you switch to it.
+
+   ![The new-profile wizard, at the add-ons step](docs/screenshots/wizard.png)
 6. On the **Install in Stremio** tab, choose **Install in Stremio**.
 
 One server can hold several Stremio accounts (`ACCESS=list` or `open`). Each account only ever
@@ -112,6 +123,27 @@ that sleeps when idle or wipes its disk on restart doesn't suit it.
 (add-on links often contain debrid keys, and libraries are watch history). Without the key, the
 saved profiles and backups can't be read. Back up the whole volume.
 
+The database is in use while the server runs, so back up the nightly copies in
+`/data/snapshots` (consistent at any time) together with the key, for example:
+
+```bash
+docker compose cp openprofiles:/data ./openprofiles-backup
+```
+
+To restore, start the container on an empty `/data` that holds `secret.key` and one of those
+copies renamed to `openprofiles.db`, owned by the container's user (uid 1000). OpenProfiles
+checks the key against the data when it starts and refuses a mismatch.
+
+### Updating
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+The example compose file follows `1.0`, so this brings fixes (1.0.x). For a new minor version,
+change the image tag. Database changes are applied on start, and each release says in
+[CHANGELOG.md](CHANGELOG.md) if anything needs doing by hand.
+
 ## Running the server
 
 Whoever signed in first owns the server and gets a **Server** tab (so do any `ADMINS`). Nobody
@@ -121,8 +153,9 @@ else sees it, and it only ever shows counts: nothing on it names or picks out an
   installed, unused for 60 days), switches per day this week and any that didn't finish, the
   daily jobs' last run, the database copies, memory, database size and free disk, and the
   errors and warnings since the server started, grouped by message (details stay in the log).
-- **Who can sign in:** the access rule, the list and the account limit. The owner can always
-  sign in, whatever the rule, so a list without them can't lock them out.
+- **Who can sign in:** the access rule, the list, the account limit and how long an unused
+  account is kept. The owner can always sign in, whatever the rule, so a list without them
+  can't lock them out.
 - **Look:** the server's name, accent colour, logo (PNG, JPG or WebP; it is redrawn as a
   256 px PNG, so nothing else in the file is kept) and light, dark or automatic appearance.
 - **Sign-in page, announcement, about:** the headline and introduction, a notice shown at the
@@ -163,6 +196,8 @@ Each profile has its own add-on list. Open a profile's **Edit**, then **Manage a
   catalogs,
 - add an add-on by its link, or one another profile has,
 - check that each add-on still answers.
+
+![A profile's add-ons, Metadata and Cinemeta cards](docs/screenshots/addons.png)
 
 Cinemeta and Local Files are Stremio's protected add-ons: they can be moved but not removed.
 OpenProfiles itself stays in every list, so the Switch profile row never disappears.
@@ -221,7 +256,8 @@ the profile's tile in Stremio, and goes into "Download everything".
   account. Treat the link like a password. **Get a new link** on the settings page replaces it
   (and updates the copy installed in Stremio).
 - The settings page uses a session cookie (`HttpOnly`, `SameSite=Strict`), CSRF tokens on every
-  form, and a login rate limit.
+  form, and a login rate limit. Each account can start at most 60 trips to Stremio in 10
+  minutes, so one account looping pages can't get the server throttled by Stremio for everyone.
 - Each Stremio account on a server only ever sees and changes its own profiles and backups.
 - The server log never records emails, IP addresses, add-on links or watch history; add-on
   tokens in request paths are masked. `/privacy` lists everything that is kept.

@@ -1,7 +1,7 @@
 name: Docker image
 
 # Publishes ghcr.io/<owner>/openprofiles: `latest` from main, and `X.Y.Z` / `X.Y`
-# from version tags (git tag v0.1.0 && git push --tags).
+# from version tags (git tag v1.0.0 && git push origin v1.0.0).
 on:
   push:
     branches: [main]
