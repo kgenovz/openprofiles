@@ -33,7 +33,7 @@ Things to know:
 - **Refreshing after a switch:** in the Switch profile row, tap the profile's stream
   ("Tap here to refresh Stremio"). Stremio reloads and lands on Home on desktop (after a quick
   hop through the browser), or on your Library on Android phones and Android TV (then go back
-  Home). After switching from the settings page, just click back into the Stremio window. Apps
+  Home). After switching from the web page, just click back into the Stremio window. Apps
   where that doesn't work (older ones) need a close and reopen.
 - **Save before switching** if you finished watching something on another device. Use *Save now*
   on the profile in use, so its latest progress is kept.
@@ -96,6 +96,7 @@ https.
 5. **New profile** opens a short wizard: name, picture and colour; what it starts with (an empty
    library, a copy of the account, or a copy of another profile); which add-ons it has and in what
    order; and which Cinemeta catalogs it shows. Nothing in Stremio changes until you switch to it.
+   A photo of your own can be added afterwards, from the profile's **Edit › Picture**.
 
    ![The new-profile wizard, at the add-ons step](docs/screenshots/wizard.png)
 6. On the **Install in Stremio** tab, choose **Install in Stremio**.
@@ -253,11 +254,17 @@ the profile's tile in Stremio, and goes into "Download everything".
 ## Security notes
 
 - The add-on link contains a secret token, because opening a profile in Stremio switches the
-  account. Treat the link like a password. **Get a new link** on the settings page replaces it
-  (and updates the copy installed in Stremio).
-- The settings page uses a session cookie (`HttpOnly`, `SameSite=Strict`), CSRF tokens on every
-  form, and a login rate limit. Each account can start at most 60 trips to Stremio in 10
-  minutes, so one account looping pages can't get the server throttled by Stremio for everyone.
+  account. Treat the link like a password. **Get a new link** on the **Install in Stremio** tab
+  replaces it (and updates the copy installed in Stremio).
+- The web page uses a session cookie (`HttpOnly`, `SameSite=Strict`), CSRF tokens on every
+  form, and sign-in rate limits per address and per email. Each account can start at most 60
+  trips to Stremio in 10 minutes, so one account looping pages can't get the server throttled
+  by Stremio for everyone.
+- Sign-ins are only accepted from the server's own sign-in page (checked with the browser's
+  `Sec-Fetch-Site`, else `Origin`), so another site can't sign your browser into its account.
+  Pages send no referrer to other sites (`Referrer-Policy: same-origin`).
+- Uploaded pictures (the server logo, profile photos) are decoded and drawn again as plain
+  PNG/JPEG before they're kept; SVGs and anything that isn't a PNG, JPG or WebP are refused.
 - Each Stremio account on a server only ever sees and changes its own profiles and backups.
 - The server log never records emails, IP addresses, add-on links or watch history; add-on
   tokens in request paths are masked. `/privacy` lists everything that is kept.
