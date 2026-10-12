@@ -25,7 +25,9 @@ function securityHeaders(req, res, next) {
     "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; " +
     "frame-ancestors 'none'; form-action 'self'; base-uri 'none'");
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'no-referrer');
+  // Other sites never get a referrer. Our own forms still carry their origin
+  // (with "no-referrer" a form POST says `Origin: null`, which the sign-in check refused).
+  res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'DENY');
   next();
 }
@@ -144,8 +146,14 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
   })();
   app.post('/signin', async (req, res, next) => {
     // A sign-in posted from another site would sign this browser into someone else's account.
+    // Browsers that send Sec-Fetch-Site say where the form was: only this site's own pages count.
+    // Older ones are judged by Origin, when it names a site.
+    const fetchSite = req.get('sec-fetch-site');
     const origin = req.get('origin');
-    if (req.get('sec-fetch-site') === 'cross-site' || (origin && origin !== ownOrigin && origin !== `${req.protocol}://${req.get('host')}`)) {
+    const foreign = fetchSite
+      ? !['same-origin', 'none'].includes(fetchSite)
+      : Boolean(origin && origin !== 'null' && origin !== ownOrigin && origin !== `${req.protocol}://${req.get('host')}`);
+    if (foreign) {
       return sendPage(res, signInPage({ error: 'Sign in from this page.', site: site() }), 403);
     }
     return next();

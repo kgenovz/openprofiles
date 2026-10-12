@@ -179,7 +179,7 @@ export function layout({ title, body, account, csrf, tab = null, wide = false, s
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer">
+  <meta name="referrer" content="same-origin">
   <title>${title} · ${site.name}</title>
   <link rel="icon" href="${logo}">
   <link rel="stylesheet" href="/fonts/400.css">

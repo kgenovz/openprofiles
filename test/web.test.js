@@ -143,3 +143,51 @@ describe('web', () => {
     assert.equal(blocked.status, 429, 'even the right password is refused while limited');
   });
 });
+
+// Its own server: the sign-ins here would otherwise count against the suite's per-address limit.
+describe('where a sign-in may come from', () => {
+  let server;
+  let base;
+
+  before(async () => {
+    const ctx = makeService({ fake: seededFake() });
+    server = createApp({ config: { publicUrl: 'http://localhost', trustProxy: false }, db: ctx.db, accounts: ctx.accounts, settings: ctx.settings, log: silentLogger }).listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  after(() => server.close());
+
+  const signIn = (headers) => fetch(`${base}/signin`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
+    body: new URLSearchParams({ email: 'kyle@example.com', password: STREMIO_PASSWORD }),
+  });
+
+  it('its own page, the way browsers post it', async () => {
+    // A form post from a page with a strict referrer policy says `Origin: null` (2026-10-12: this was refused).
+    assert.equal((await signIn({ 'sec-fetch-site': 'same-origin', origin: 'null' })).status, 303);
+    assert.equal((await signIn({ 'sec-fetch-site': 'same-origin', origin: base })).status, 303);
+    assert.equal((await signIn({})).status, 303, 'no browser headers at all (scripts, old browsers)');
+  });
+
+  it('never another site', async () => {
+    for (const headers of [
+      { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' },
+      { 'sec-fetch-site': 'same-site', origin: 'https://other.example.com' },
+      { 'sec-fetch-site': 'cross-site', origin: 'null' },
+      { origin: 'https://evil.example' },
+    ]) {
+      const res = await signIn(headers);
+      assert.equal(res.status, 403, JSON.stringify(headers));
+      assert.match(await res.text(), /Sign in from this page/);
+    }
+  });
+
+  it('pages send no referrer to other sites', async () => {
+    const res = await fetch(`${base}/signin`);
+    assert.equal(res.headers.get('referrer-policy'), 'same-origin');
+    assert.match(await res.text(), /<meta name="referrer" content="same-origin">/);
+  });
+});
