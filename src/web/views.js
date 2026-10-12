@@ -961,10 +961,12 @@ export function privacyPage({ instance = {} } = {}) {
         <li>Your Stremio password. It goes to Stremio once, to get the sign-in key.</li>
         <li>No analytics, ads or tracking. These pages load nothing from other sites.</li>
         <li>The server log has no emails, IP addresses, add-on links or watch history: only events like "account 3 switched profiles", and errors.</li>
-        ${instance.privacyNote ? html`<li>${instance.privacyNote}</li>` : ''}
       </ul>
 
-      <h2 class="h3">Who can read it</h2>
+      ${instance.privacyNote ? html`<h2 class="h3">This server</h2>
+      <p>${instance.privacyNote}</p>
+
+      ` : ''}<h2 class="h3">Who can read it</h2>
       <p>It's encrypted with this server's key, and whoever runs the server holds that key. Trust them as you would any service that has your add-on links, or run your own.</p>
 
       <h2 class="h3">Deleting it</h2>
