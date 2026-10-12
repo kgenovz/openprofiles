@@ -40,7 +40,7 @@ const FETCH_BUDGET = 80;
 const FETCH_WINDOW_MS = 10 * 60 * 1000;
 
 export const NO_DETAILS_WARNING =
-  "Details pages are off and no other add-on in this profile provides them, so titles will open without descriptions or episode lists.";
+  "Details pages are off and no other add-on in this profile gives them for IMDb-id titles, so those will open without descriptions or episode lists. That is fine if the profile only uses another add-on's ids (e.g. TMDB ids).";
 
 export const NATIVE_PROFILES_WARNING =
   'Your Stremio account has its own profiles (a Supporter feature). OpenProfiles would swap the library ' +
@@ -384,7 +384,9 @@ export class ProfilesService {
     const others = addonPool(this.savedAddonLists({ skip: profileId }));
     const { index, wrapped, wrappedIndex } = findCinemeta(addons);
     const nameOf = (a) => String(a.manifest?.name || a.manifest?.id || 'Another add-on');
-    const details = detailsSource(addons);
+    // With nothing covering IMDb ids (a TMDB-ids-only setup), the own-ids add-on is the source.
+    let details = detailsSource(addons);
+    if (details === -1) details = addons.findIndex((a) => !isSelfAddon(a) && givesOwnDetailsOnly(a));
     return {
       profile,
       active,
@@ -405,10 +407,10 @@ export class ProfilesService {
       metadata: {
         current: details === -1 ? null : addonRef(addons[details]),
         currentName: details === -1 ? null : nameOf(addons[details]),
-        options: addons.filter((a, i) => !isSelfAddon(a) && (i === index || givesTitleDetails(a)))
-          .map((a) => ({ ref: addonRef(a), name: nameOf(a) })),
-        // Metadata add-ons for their own titles only (e.g. TMDB with "tmdb:" ids): shown, not pickable.
-        ownTitlesOnly: addons.filter((a) => !isSelfAddon(a) && givesOwnDetailsOnly(a)).map(nameOf),
+        currentOwnIds: details !== -1 && givesOwnDetailsOnly(addons[details]),
+        // `ownIds`: covers its own ids only (e.g. TMDB set to "tmdb:" ids), for setups without IMDb ids.
+        options: addons.filter((a, i) => !isSelfAddon(a) && (i === index || givesTitleDetails(a) || givesOwnDetailsOnly(a)))
+          .map((a) => ({ ref: addonRef(a), name: nameOf(a), ownIds: givesOwnDetailsOnly(a) })),
       },
     };
   }
@@ -485,12 +487,13 @@ export class ProfilesService {
       change: async (current, profile) => {
         const { index } = findCinemeta(current);
         const pick = current.findIndex((a) => addonRef(a) === ref);
-        if (pick === -1 || isSelfAddon(current[pick]) || !(pick === index || givesTitleDetails(current[pick]))) {
+        const ownIds = pick !== -1 && givesOwnDetailsOnly(current[pick]);
+        if (pick === -1 || isSelfAddon(current[pick]) || !(pick === index || givesTitleDetails(current[pick]) || ownIds)) {
           throw new UserError('NO_METADATA', `That add-on can't give ${profile.name}'s details pages. Reload the page and try again.`);
         }
         const name = current[pick].manifest?.name || 'that add-on';
         sourceName = name;
-        const warnings = [];
+        let warnings = [];
         let list = current;
         if (index !== -1) {
           const now = deriveSettings(current[index].manifest);
@@ -499,6 +502,11 @@ export class ProfilesService {
         const out = list.slice();
         const [chosen] = out.splice(pick, 1);
         out.unshift(chosen);
+        // An own-ids source (e.g. TMDB ids) is right for a setup without IMDb ids; say what it means otherwise.
+        if (ownIds && detailsSource(out) === -1) {
+          warnings = warnings.filter((w) => w !== NO_DETAILS_WARNING);
+          warnings.push(`${name} gives details pages only for its own ids. That's right if ${profile.name} only uses those (e.g. TMDB ids); titles with IMDb ids, like ones from Cinemeta, will open without descriptions or episode lists.`);
+        }
         return { addons: out, warnings, activity: `${profile.name}'s details pages now come from ${name}` };
       },
     });

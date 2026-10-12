@@ -589,18 +589,17 @@ function metadataCard(p, metadata, { csrf, base }) {
     <input type="hidden" name="base" value="${base}">
     <h2>${p.name} · Metadata</h2>
     <p class="hint">${metadata.currentName
-      ? html`Details pages (descriptions, cast, episode lists) come from <strong>${metadata.currentName}</strong>.`
+      ? html`Details pages (descriptions, cast, episode lists) come from <strong>${metadata.currentName}</strong>${metadata.currentOwnIds ? ', for titles with its own ids' : ''}.`
       : `No add-on of ${p.name} gives details pages for movies and series, so titles open without them.`}</p>
-    ${metadata.options.length > 1 || (metadata.options.length === 1 && !metadata.current) || metadata.ownTitlesOnly.length ? html`<div class="add-by-link">
+    ${metadata.options.length > 1 || (metadata.options.length === 1 && !metadata.current) ? html`<div class="add-by-link">
       <label class="grow">Get details pages from
         <select name="source" data-current="${metadata.current ?? ''}">
-          ${metadata.options.map((o) => html`<option value="${o.ref}" ${o.ref === metadata.current ? 'selected' : ''}>${o.name}</option>`)}
-          ${metadata.ownTitlesOnly.map((name) => html`<option disabled>${name} (only titles from its own catalogs)</option>`)}
+          ${metadata.options.map((o) => html`<option value="${o.ref}" ${o.ref === metadata.current ? 'selected' : ''}>${o.name}${o.ownIds ? ' (its own ids)' : ''}</option>`)}
         </select></label>
       <button type="submit" data-metadata-go>Change</button>
     </div>
     <p class="hint">The add-on you pick moves to the top of the list. Cinemeta's own details pages turn off, unless you pick Cinemeta.</p>
-    ${metadata.ownTitlesOnly.length ? html`<p class="hint">Greyed out: ${metadata.ownTitlesOnly.join(', ')}. These give details pages only for titles from their own catalogs (they use their own ids, not IMDb's), so they can't take over for your library or Cinemeta's rows.</p>` : ''}` : ''}
+    ${metadata.options.some((o) => o.ownIds) ? html`<p class="hint">"Its own ids" add-ons (like TMDB set to TMDB ids) give details pages only for titles that use their ids. Pick one if this profile runs on those ids alone, with Cinemeta off; titles with IMDb ids won't get details pages from it.</p>` : ''}` : ''}
   </form>`;
 }
 
@@ -664,7 +663,7 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
         ${cinemeta.present ? html`
           <p class="hint">Cinemeta is Stremio's built-in catalog add-on. These only change ${p.name}.</p>
           <div class="switches">${cinemetaSwitches('', cinemeta.settings)}</div>
-          <div class="warn" data-meta-warning ${cinemeta.settings.removeMeta && !cinemeta.otherMeta ? '' : 'hidden'}>${icon.alert}<span>Details pages are off and no other add-on of ${p.name} provides them. Titles will open without descriptions or episode lists.</span></div>
+          <div class="warn" data-meta-warning ${cinemeta.settings.removeMeta && !cinemeta.otherMeta ? '' : 'hidden'}>${icon.alert}<span>Details pages are off and no other add-on of ${p.name} gives them for IMDb-id titles, so those will open without descriptions or episode lists. Fine if ${p.name} only uses another add-on's ids (e.g. TMDB ids).</span></div>
           ${cinemeta.wrapped ? wrapperWarning({
             name: cinemeta.wrappedName,
             profile: p.name,

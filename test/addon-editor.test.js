@@ -266,11 +266,9 @@ describe('Cinemeta control per profile', () => {
     tmdbIds.manifest.idPrefixes = ['tmdb:'];
     fake.addons = [...fake.addons, aio, tmdbIds];
     let manager = await service.addonManager(original.id);
-    assert.deepEqual(manager.metadata.ownTitlesOnly, ['The Movie Database Addon'], 'TMDB on tmdb: ids is shown, not offered');
-    const own = manager.addons.find((a) => a.name === 'The Movie Database Addon');
-    await assert.rejects(service.setMetadataSource(original.id, own.ref, { base: manager.base }), (e) => e.code === 'NO_METADATA');
+    assert.ok(manager.metadata.options.find((o) => o.name === 'The Movie Database Addon').ownIds, 'TMDB on tmdb: ids is offered, marked as its own ids');
     assert.equal(manager.metadata.currentName, 'Cinemeta', 'stock Cinemeta is first, so it gives details pages');
-    assert.deepEqual(manager.metadata.options.map((o) => o.name), ['Cinemeta', 'tmdb', 'Local Files', 'AIOMetadata']);
+    assert.deepEqual(manager.metadata.options.map((o) => o.name), ['Cinemeta', 'tmdb', 'Local Files', 'AIOMetadata', 'The Movie Database Addon']);
     const debrid = manager.addons.find((a) => a.name === 'debrid');
     await assert.rejects(service.setMetadataSource(original.id, debrid.ref, { base: manager.base }), (e) => e.code === 'NO_METADATA');
 
@@ -291,6 +289,31 @@ describe('Cinemeta control per profile', () => {
     list = saved(original.id).addons;
     assert.equal(list[0].manifest.name, 'Cinemeta');
     assert.equal(deriveSettings(list[0].manifest).removeMeta, false, "Cinemeta's details back on");
+  });
+
+  it('a TMDB-ids-only setup: TMDB can be the source, and the warning says what that means', async () => {
+    const { service, fake, saved, refs } = await setup({ localFiles: false });
+    const tmdbIds = richAddon('The Movie Database Addon', {
+      resources: ['catalog', 'meta'],
+      catalogs: [{ type: 'movie', id: 'tmdb.search', name: 'Search', extra: [{ name: 'search', isRequired: true }] }],
+    });
+    tmdbIds.manifest.idPrefixes = ['tmdb:'];
+    fake.addons = [...fake.addons, tmdbIds];
+    // A profile with Cinemeta, the debrid add-on and TMDB on its own ids (nothing else gives details).
+    const kids2 = await service.createProfile({ name: 'TMDB only', from: 'empty' });
+    let editor = await service.editableAddons(kids2.id);
+    await service.saveAddons(kids2.id, { base: editor.base, refs: refs(editor.addons.filter((a) => a.manifest.name !== 'tmdb')) });
+
+    let manager = await service.addonManager(kids2.id);
+    const pick = manager.metadata.options.find((o) => o.name === 'The Movie Database Addon').ref;
+    const result = await service.setMetadataSource(kids2.id, pick, { base: manager.base });
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /only for its own ids.*IMDb ids/);
+    assert.equal(saved(kids2.id).addons[0].manifest.name, 'The Movie Database Addon');
+
+    manager = await service.addonManager(kids2.id);
+    assert.equal(manager.metadata.currentName, 'The Movie Database Addon', 'with nothing for IMDb ids, it is the source');
+    assert.equal(manager.metadata.currentOwnIds, true);
   });
 
   it('reset puts the stock manifest back exactly', async () => {
