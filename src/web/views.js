@@ -438,7 +438,6 @@ export function profilesPage({ site, csrf, flash, status, addon, undo, editing =
         ${profiles.map((p) => profileCard(p, { active: p.id === activeProfileId, csrf, locked, editing: editing?.profile.id === p.id }))}
         ${profiles.length < MAX_PROFILES ? html`<a class="new-tile" href="/profiles/new">${icon.plus}New profile</a>` : ''}
       </div>
-      <p class="hint">Finished watching something on another device? Use <em>Save now</em> on the profile in use before switching.</p>
     </section>
 
     ${editing ? profileEditor(editing, { csrf, locked }) : ''}`,

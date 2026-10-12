@@ -123,6 +123,13 @@ export class StremioClient {
     return result;
   }
 
+  /** Just these libraryItem rows (ids Stremio doesn't have are left out). */
+  async getLibraryItems(authKey, ids) {
+    const result = await this.call('datastoreGet', { authKey, collection: 'libraryItem', ids });
+    if (!Array.isArray(result)) throw new StremioError('bad_response', MESSAGES.badResponse, { method: 'datastoreGet' });
+    return result;
+  }
+
   async putLibrary(authKey, changes) {
     await this.call('datastorePut', { authKey, collection: 'libraryItem', changes });
   }

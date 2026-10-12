@@ -154,6 +154,12 @@ export class AccountRepo {
       WHERE id = @id AND account_id = @accountId`).run({ id, accountId: this.accountId, now: this.now(), ...enc });
   }
 
+  /** Replace only the saved library; the add-ons, notifications and "saved at" time stay. */
+  saveProfileLibrary(id, library) {
+    this.db.prepare('UPDATE profiles SET library_enc = ?, library_count = ? WHERE id = ? AND account_id = ?')
+      .run(this.cipher.encryptJson(library, 'library'), countActive(library), id, this.accountId);
+  }
+
   /** Replace only the saved add-on list; the library, notifications and "saved at" time stay. */
   saveProfileAddons(id, addons) {
     this.db.prepare('UPDATE profiles SET addons_enc = ?, addon_count = ? WHERE id = ? AND account_id = ?')
@@ -348,6 +354,29 @@ export class AccountRepo {
       WHERE id = ? AND account_id = ?`).run(status, this.now(), JSON.stringify(warnings), id, this.accountId);
   }
 
+  // ── titles followed after a switch (core/carryover.js) ──────────────────
+
+  listCarryovers() {
+    return this.db.prepare('SELECT * FROM carryovers WHERE account_id = ? ORDER BY id').all(this.accountId).map((row) => ({
+      ownerProfileId: row.owner_profile_id,
+      createdAt: row.created_at,
+      changedAt: row.changed_at,
+      expiresAt: row.expires_at,
+      ...this.cipher.decryptJson(row.item_enc, 'carryover'),
+    }));
+  }
+
+  /** The account's whole list, replaced. Titles are viewing history, so they're encrypted. */
+  replaceCarryovers(records) {
+    this.db.prepare('DELETE FROM carryovers WHERE account_id = ?').run(this.accountId);
+    const insert = this.db.prepare(`INSERT INTO carryovers
+      (account_id, owner_profile_id, item_enc, created_at, changed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`);
+    for (const r of records) {
+      const enc = this.cipher.encryptJson({ base: r.base, written: r.written, seenMtime: r.seenMtime ?? null }, 'carryover');
+      insert.run(this.accountId, r.ownerProfileId, enc, r.createdAt, r.changedAt ?? null, r.expiresAt);
+    }
+  }
+
   getOpenJournal() {
     const row = this.db.prepare(`SELECT * FROM switch_journal WHERE account_id = ? AND status = 'open'
       ORDER BY id DESC LIMIT 1`).get(this.accountId);
@@ -404,6 +433,11 @@ export class Accounts {
     const now = this.now();
     this.db.prepare('UPDATE accounts SET last_addon_at = ? WHERE id = ? AND (last_addon_at IS NULL OR last_addon_at < ?)')
       .run(now, id, now - ADDON_TOUCH_MS);
+  }
+
+  /** Accounts following titles that kept playing after a switch. */
+  withCarryovers() {
+    return this.db.prepare('SELECT DISTINCT account_id FROM carryovers ORDER BY account_id').all().map((r) => r.account_id);
   }
 
   /** Accounts set up before `since` and not used since (see USED_SINCE). */

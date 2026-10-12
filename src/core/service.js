@@ -8,6 +8,9 @@ import {
   CINEMETA_ID, STOCK_URL as CINEMETA_STOCK_URL, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
   detailsSource, givesOwnDetailsOnly, givesTitleDetails, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
 } from './cinemeta.js';
+import {
+  MAX_MS, RESUME_MS, SETTLE_MS, UNTOUCHED_MS, isInFlight, judge, withProgress,
+} from './carryover.js';
 import { sealExport, openExport } from './exporter.js';
 import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
 import {
@@ -76,6 +79,18 @@ export function userMessageOf(err) {
 }
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A followed title whose owner's playback a read found carried on: `merged` is the owner's copy so far. */
+function seenMoving(rec, merged, live, now) {
+  const moved = live._mtime !== rec.seenMtime;
+  return {
+    ...rec,
+    base: merged,
+    seenMtime: live._mtime,
+    changedAt: moved ? now : rec.changedAt,
+    expiresAt: moved ? Math.min(now + RESUME_MS, rec.createdAt + MAX_MS) : rec.expiresAt,
+  };
+}
 
 /** The account's live library, add-ons and notifications. A failed notification read is `null`, not `[]`. */
 export async function readLiveState(stremio, authKey, log = silentLogger) {
@@ -902,8 +917,19 @@ export class ProfilesService {
       const live = await this.readLive(authKey);
       this.checkLiveSize(live);
       this.assertPlausibleLive(live, profile);
-      const copy = this.profileCopy(this.capture(live));
-      this.repo.saveProfileSnapshot(profile.id, copy);
+      // Another profile's title still playing on some device isn't this profile's to save.
+      const plan = this.planCarryovers(live.library, profile.id);
+      const copy = this.profileCopy({ ...this.capture(live), library: plan.library });
+      const now = this.now();
+      this.repo.transaction(() => {
+        this.repo.saveProfileSnapshot(profile.id, copy);
+        this.saveProgress(plan.progress);
+        this.repo.replaceCarryovers(plan.verdicts.flatMap(({ rec, v, item }) => {
+          if (v.kind === 'released') return [];
+          if (v.kind === 'untouched') return rec.expiresAt > now ? [rec] : [];
+          return [seenMoving(rec, v.item, item, now)];
+        }));
+      });
       return { profile: this.repo.getProfile(profile.id), notifsSaved: copy.notifs !== null };
     });
   }
@@ -939,6 +965,13 @@ export class ProfilesService {
     const outgoing = state.active_profile_id != null ? this.repo.getProfile(state.active_profile_id) : null;
     this.assertPlausibleLive(live, outgoing);
 
+    // Titles another profile kept playing on some device go back to that profile instead of
+    // into the outgoing one. Those still playing, and the outgoing profile's own, are followed.
+    const plan = this.planCarryovers(live.library, outgoing?.id ?? null);
+    const targetProgress = plan.progress.get(profileId);
+    if (targetProgress) targetSnap.library = withProgress(targetSnap.library, targetProgress) ?? targetSnap.library;
+    const follow = this.nextFollowed(plan, outgoing?.id ?? null, profileId);
+
     // 6-7. Backup, save the outgoing profile and open the journal, all or nothing.
     const journalId = this.repo.transaction(() => {
       const backupId = this.repo.insertBackup({
@@ -947,28 +980,35 @@ export class ProfilesService {
         stremioUserId: account.stremio_user_id,
         snapshot: captured,
       });
-      if (outgoing) this.repo.saveProfileSnapshot(outgoing.id, this.profileCopy(captured));
+      if (outgoing) this.repo.saveProfileSnapshot(outgoing.id, this.profileCopy({ ...captured, library: plan.library }));
+      this.saveProgress(plan.progress);
       return this.repo.startJournal({ kind: 'switch', fromProfileId: outgoing?.id ?? null, toProfileId: profileId, rollbackBackupId: backupId });
     });
     this.log.info('Switch started', { journalId, from: outgoing?.id ?? null, to: profileId });
 
     // 8-10. Write to Stremio.
-    const result = await this.applyOrFail('switch', journalId, authKey, live, targetSnap, profileId);
+    const { written, ...result } = await this.applyOrFail('switch', journalId, authKey, live, targetSnap, profileId,
+      new Set(follow.map((r) => r.base._id)));
 
     // 11. Flip the pointer.
     this.repo.transaction(() => {
       this.repo.setActiveProfile(profileId);
       this.repo.closeJournal(journalId, 'finished', result.warnings);
+      // A title the switch left as it was is still what Stremio has.
+      this.repo.replaceCarryovers(follow
+        .map((r) => ({ ...r, written: written.get(r.base._id) ?? plan.liveById.get(r.base._id) }))
+        .filter((r) => r.written));
     });
     this.repo.pruneBackups();
     this.repo.logActivity('switch', `Switched from ${outgoing ? `"${outgoing.name}"` : '(none)'} to "${target.name}"`);
+    this.logProgressMoved(plan.progress.keys());
     this.log.info('Switch finished', { journalId, ...result.library, warnings: result.warnings.length });
     return { alreadyActive: false, profile: this.repo.getProfile(profileId), ...result };
   }
 
-  async applyOrFail(what, journalId, authKey, live, target, profileId) {
+  async applyOrFail(what, journalId, authKey, live, target, profileId, track = null) {
     try {
-      return await this.applySnapshot(journalId, authKey, live, target, profileId);
+      return await this.applySnapshot(journalId, authKey, live, target, profileId, track);
     } catch (err) {
       this.repo.failJournal(journalId, userMessageOf(err));
       this.log.error(`${what} interrupted`, { journalId, error: err.message });
@@ -984,9 +1024,11 @@ export class ProfilesService {
    * the old add-ons would save them into the target at the next switch away.)
    * Notifications are best-effort; when they can't be swapped, the account
    * remembers that Stremio's aren't the active profile's, so they aren't saved
-   * into it later. `profileId` is the profile in use once it's done.
+   * into it later. `profileId` is the profile in use once it's done. With
+   * `track` (title ids), `written` maps each of those titles that was written
+   * to what was written for it.
    */
-  async applySnapshot(journalId, authKey, live, target, profileId) {
+  async applySnapshot(journalId, authKey, live, target, profileId, track = null) {
     const warnings = [];
 
     this.repo.setJournalPhase(journalId, 'library');
@@ -1018,7 +1060,9 @@ export class ProfilesService {
       }
     }
     this.repo.setNotifsForeign(!notifsSwapped);
-    return { library: lib.stats, warnings };
+    const result = { library: lib.stats, warnings };
+    if (track) result.written = new Map(lib.changes.filter((c) => track.has(c._id)).map((c) => [c._id, c]));
+    return result;
   }
 
   async putChunks(changes, size, write) {
@@ -1027,6 +1071,164 @@ export class ProfilesService {
       await write(chunks[i]);
       if (i < chunks.length - 1) await this.sleep(INTER_BATCH_DELAY_MS);
     }
+  }
+
+  // ── titles still playing elsewhere after a switch (core/carryover.js) ────
+
+  /** The followed titles. Unreadable records are let go rather than block a switch. */
+  followed() {
+    try {
+      return this.repo.listCarryovers();
+    } catch (err) {
+      this.log.warn("Couldn't read the titles followed after a switch; letting them go", { error: err.message });
+      return [];
+    }
+  }
+
+  /**
+   * The followed titles judged against a fresh read (`library`: the live
+   * library, or just those titles). Returns the verdicts, each owner's copies
+   * with new progress, and the library as the profile in use should save it:
+   * titles another profile kept playing put back to what the switch wrote.
+   * Records whose owner is `activeId` again, or gone, drop out.
+   */
+  planCarryovers(library, activeId, records = this.followed()) {
+    const liveById = new Map(library.filter(hasId).map((it) => [it._id, it]));
+    const verdicts = [];
+    const putBack = new Map();
+    const progress = new Map();
+    for (const rec of records) {
+      if (rec.ownerProfileId === activeId || !this.repo.getProfile(rec.ownerProfileId)) continue;
+      const item = liveById.get(rec.base._id);
+      const v = judge(rec, item);
+      verdicts.push({ rec, v, item });
+      if (v.kind !== 'owner') continue;
+      putBack.set(rec.base._id, rec.written);
+      progress.set(rec.ownerProfileId, [...(progress.get(rec.ownerProfileId) ?? []), v.item]);
+    }
+    return { verdicts, progress, liveById, library: putBack.size ? library.map((it) => putBack.get(it._id) ?? it) : library };
+  }
+
+  /**
+   * What to follow after switching from `outgoingId` to `targetId` (without
+   * `written` yet): other profiles' titles still playing or not touched yet,
+   * and the outgoing profile's titles watched in the last half hour. The
+   * target's own drop out: it's in use again, so its device writes land home.
+   */
+  nextFollowed(plan, outgoingId, targetId) {
+    const now = this.now();
+    const next = [];
+    for (const { rec, v } of plan.verdicts) {
+      if (rec.ownerProfileId === targetId) continue;
+      if (v.kind === 'untouched' && rec.expiresAt > now) next.push(rec);
+      if (v.kind === 'owner' && isInFlight(v.item, now)) {
+        next.push({ ...rec, base: v.item, seenMtime: null, changedAt: now, expiresAt: Math.min(now + RESUME_MS, rec.createdAt + MAX_MS) });
+      }
+    }
+    if (outgoingId != null) {
+      const ids = new Set(next.map((r) => r.base._id));
+      for (const item of plan.library) {
+        if (ids.has(item._id) || String(item._id).startsWith(ID_PREFIX) || !isInFlight(item, now)) continue;
+        next.push({ ownerProfileId: outgoingId, base: item, createdAt: now, changedAt: null, seenMtime: null, expiresAt: now + UNTOUCHED_MS });
+      }
+    }
+    return next;
+  }
+
+  /** Put owners' new progress into their saved copies, never moving a title backwards. */
+  saveProgress(progress) {
+    for (const [ownerId, items] of progress) {
+      const row = this.repo.getProfileRow(ownerId);
+      if (!row) continue;
+      try {
+        const next = withProgress(decodeSnapshot(this.repo.cipher, row, row.name).library, items);
+        if (next) this.repo.saveProfileLibrary(ownerId, next);
+      } catch (err) {
+        this.log.warn("Couldn't add progress made elsewhere to a profile's saved copy", { profileId: ownerId, error: err.message });
+      }
+    }
+  }
+
+  logProgressMoved(ownerIds) {
+    for (const id of ownerIds) {
+      const name = this.repo.getProfile(id)?.name;
+      if (name) this.repo.logActivity('carryover', `Progress made on another device after a switch went back to "${name}"`);
+    }
+  }
+
+  /**
+   * The background check, every few minutes while titles are followed. Reads
+   * just those titles. Once the owner's playback has been still for SETTLE_MS,
+   * the progress goes into the owner's saved copy and the title is put back
+   * the way the switch left it, so it leaves the profile in use. It stays
+   * followed until it expires, in case it was only paused. Doesn't count
+   * against the account's Stremio budget.
+   */
+  checkCarryovers() {
+    return this.lock.run(async () => {
+      const none = { following: 0, settled: 0 };
+      if (!this.repo.getAccount() || this.repo.getOpenJournal()) return none;
+      const now = this.now();
+      const activeId = this.repo.getState()?.active_profile_id ?? null;
+      const records = this.followed().filter((r) => now < r.createdAt + MAX_MS && r.ownerProfileId !== activeId);
+      if (records.length === 0) {
+        this.repo.replaceCarryovers([]);
+        return none;
+      }
+      let items;
+      try {
+        items = await this.stremio.getLibraryItems(this.repo.getAuthKey(), [...new Set(records.map((r) => r.base._id))]);
+      } catch (err) {
+        if (err.kind === 'auth') {
+          this.repo.replaceCarryovers([]);
+          return none;
+        }
+        throw err;
+      }
+      const plan = this.planCarryovers(items, activeId, records);
+      const next = [];
+      const settle = [];
+      for (const { rec, v, item } of plan.verdicts) {
+        if (v.kind === 'released') continue;
+        if (v.kind === 'untouched') {
+          if (rec.expiresAt > now) next.push(rec);
+        } else if (item._mtime !== rec.seenMtime) {
+          next.push(seenMoving(rec, v.item, item, now));
+        } else if (now - rec.changedAt >= SETTLE_MS || rec.expiresAt <= now) {
+          settle.push({ rec, merged: v.item });
+        } else {
+          next.push({ ...rec, base: v.item });
+        }
+      }
+
+      let putBack = [];
+      if (settle.length) {
+        try {
+          const { authKey } = await this.session({ spend: false });
+          const at = this.now();
+          putBack = settle.map(({ rec }, i) => ({ ...rec.written, _mtime: new Date(at - i).toISOString() }));
+          await this.stremio.putLibrary(authKey, putBack);
+        } catch (err) {
+          this.log.warn('Putting back titles that stopped playing elsewhere failed; trying again later', { error: err.message });
+          putBack = [];
+          next.push(...settle.map(({ rec, merged }) => ({ ...rec, base: merged })));
+        }
+      }
+      const progress = new Map();
+      if (putBack.length) {
+        settle.forEach(({ rec, merged }, i) => {
+          progress.set(rec.ownerProfileId, [...(progress.get(rec.ownerProfileId) ?? []), merged]);
+          if (rec.expiresAt > now) next.push({ ...rec, base: merged, written: putBack[i], seenMtime: null });
+        });
+      }
+      this.repo.transaction(() => {
+        this.saveProgress(progress);
+        this.repo.replaceCarryovers(next);
+      });
+      this.logProgressMoved(progress.keys());
+      if (putBack.length) this.log.info('Titles played elsewhere after a switch went back to their profiles', { titles: putBack.length });
+      return { following: next.length, settled: putBack.length };
+    });
   }
 
   // ── recovery ─────────────────────────────────────────────────────────────
@@ -1049,6 +1251,9 @@ export class ProfilesService {
         if (j.kind === 'switch') this.repo.setActiveProfile(j.to_profile_id);
         else this.repo.saveProfileSnapshot(j.to_profile_id, target);
         this.repo.closeJournal(j.id, 'finished', result.warnings);
+        // A whole rewrite (this, going back, a restore) ends following titles played elsewhere:
+        // what a device did since can't be told apart from what was just written.
+        this.repo.replaceCarryovers([]);
       });
       this.repo.pruneBackups();
       this.repo.logActivity('recovery', 'Finished an interrupted switch');
@@ -1072,7 +1277,10 @@ export class ProfilesService {
       const result = await this.applyOrFail('rollback', j.id, authKey, live, snapshot, j.from_profile_id);
       // The pointer never moved and the outgoing profile was saved before any
       // write, so closing the journal is all that's left.
-      this.repo.closeJournal(j.id, 'rolled_back', result.warnings);
+      this.repo.transaction(() => {
+        this.repo.closeJournal(j.id, 'rolled_back', result.warnings);
+        this.repo.replaceCarryovers([]);
+      });
       this.repo.logActivity('recovery', 'Went back to before an interrupted switch');
       this.log.info('Interrupted operation rolled back', { journalId: j.id });
       return result;
@@ -1181,6 +1389,7 @@ export class ProfilesService {
       this.repo.transaction(() => {
         this.repo.saveProfileSnapshot(active.id, target);
         this.repo.closeJournal(journalId, 'finished', result.warnings);
+        this.repo.replaceCarryovers([]);
       });
       this.repo.pruneBackups();
       this.repo.logActivity('restore', `Restored "${row.label}"`);

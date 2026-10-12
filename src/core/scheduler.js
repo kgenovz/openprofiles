@@ -85,8 +85,40 @@ export async function runDaily({ db, dataDir, accounts, settings = null, log = s
   return summary;
 }
 
-/** Runs the daily jobs once per UTC day: shortly after boot if due, then checks hourly. */
+/** How often titles still playing elsewhere after a switch are checked (core/carryover.js). */
+export const CARRYOVER_CHECK_MS = 3 * 60 * 1000;
+
+/** One round of the check, for every account following such titles. Returns how many were put back. */
+export async function checkCarryovers({ accounts, log = silentLogger }) {
+  let settled = 0;
+  for (const id of accounts.accounts.withCarryovers()) {
+    try {
+      settled += (await accounts.forAccount(id).checkCarryovers()).settled;
+    } catch (err) {
+      log.warn('Checking titles played elsewhere failed for an account', { accountId: id, error: err.userMessage || err.message });
+    }
+  }
+  return settled;
+}
+
+/**
+ * Runs the daily jobs once per UTC day (shortly after boot if due, then
+ * checks hourly), and the carry-over check every CARRYOVER_CHECK_MS.
+ */
 export function startScheduler({ db, dataDir, accounts, settings = null, log = silentLogger }) {
+  let checking = false;
+  const check = async () => {
+    if (checking) return;
+    checking = true;
+    try {
+      await checkCarryovers({ accounts, log });
+    } finally {
+      checking = false;
+    }
+  };
+  const carry = setInterval(check, CARRYOVER_CHECK_MS);
+  carry.unref();
+
   let running = false;
   const tick = async () => {
     if (running) return;
@@ -105,5 +137,5 @@ export function startScheduler({ db, dataDir, accounts, settings = null, log = s
   const every = setInterval(tick, 60 * 60 * 1000);
   first.unref();
   every.unref();
-  return { stop: () => { clearTimeout(first); clearInterval(every); }, tick };
+  return { stop: () => { clearTimeout(first); clearInterval(every); clearInterval(carry); }, tick, check };
 }

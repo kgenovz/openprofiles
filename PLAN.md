@@ -117,6 +117,22 @@ on StremShare's scrobble table, which Profiles doesn't have. Mitigation: "Save n
 page and a hint ("finished watching on another device? save before switching"). Possible v2:
 compare live item `state.timeOffset` vs the stored one per `_id` and only ever advance.
 
+*Built (2026-10-12), titles still playing elsewhere after a switch* (`core/carryover.js`,
+migration 10). stremio-core's player saves the played title every 180 s and on close, from its
+own copy or one rebuilt from the library (it keeps the stored flags and state), so a device still
+playing A's title after A→B writes it back over the tombstone and B would save it. A switch now
+follows A's titles that were part-way and watched in the last 30 min (`carryovers`, encrypted:
+A's copy, and what the switch wrote). Every later read judges each one: untouched (mtime not past
+the write), A's (same video at or past A's position minus 2 min, finished, or a later episode:
+someone in B starts from zero because the tombstone has no progress), or released to B. A's
+progress merges into A's saved copy (position from live, everything else from A's copy, counters
+never down; episode marks made on a rebuilt copy are lost) and B saves what the switch wrote
+instead. The switch back to A writes the merged copy. A background check every 3 min reads only
+the followed titles (one `datastoreGet` by ids, not counted in the budget); 7 quiet minutes after
+the last save seen means stopped, so it puts the written copy back (out of B's Continue Watching)
+and keeps following for a resume until 2 h after the last movement. Untouched titles go after
+45 min, everything after 12 h; a restore, Finish or Go back stops following. The hint was removed.
+
 ## In-Stremio switcher
 
 - Manifest: catalog `{ id:'profiles', type:<'other' or similar>, name:'Switch profile' }`, the

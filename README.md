@@ -41,8 +41,10 @@ Things to know:
   hop through the browser), or on your Library on Android phones and Android TV (then go back
   Home). After switching from the web page, just click back into the Stremio window. Apps
   where that doesn't work (older ones) need a close and reopen.
-- **Save before switching** if you finished watching something on another device. Use *Save now*
-  on the profile in use, so its latest progress is kept.
+- **Someone still watching on another device during a switch keeps their progress.** Stremio
+  saves the title they're playing back into the account as it goes, so for a while it shows in
+  the new profile's Continue Watching too. About 10 minutes after they stop, OpenProfiles moves
+  that progress to the profile that was watching and takes the title back out of the new one. Episodes marked watched on that device after the switch may need marking again.
 - **Opening a profile in the Switch profile row switches to it.** Stremio asks for the profile's
   "stream" as soon as its page opens, and that request is the switch.
 

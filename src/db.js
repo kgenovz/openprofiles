@@ -269,6 +269,22 @@ const MIGRATIONS = [
   ALTER TABLE accounts ADD COLUMN last_addon_at INTEGER;
   UPDATE accounts SET last_addon_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
   `,
+  // Titles still playing on another device when a switch happened (2026-10-12, core/carryover.js).
+  //   item_enc    encrypted { base, written, seenMtime }: the owner's copy at the switch, what the
+  //               switch wrote for the title, and the last save seen from the device
+  //   changed_at  when the owner's playback was last seen moving
+  `
+  CREATE TABLE carryovers (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    owner_profile_id INTEGER NOT NULL REFERENCES profiles (id) ON DELETE CASCADE,
+    item_enc BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    changed_at INTEGER,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX carryovers_account ON carryovers (account_id);
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {
