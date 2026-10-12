@@ -923,7 +923,7 @@ export function installPage({ site, csrf, account, flash, addon }) {
       <ol class="steps">
         <li><span class="step-n">1</span><span>Install it once, on any device. It appears on every device signed in to this Stremio account.</span></li>
         <li><span class="step-n">2</span><span>On Home, open a profile in the <strong>Switch profile</strong> row. That switches.</span></li>
-        <li><span class="step-n">3</span><span>Tap its stream to refresh Stremio. On a TV, close and reopen the app instead.</span></li>
+        <li><span class="step-n">3</span><span>Tap its stream to refresh Stremio, on phones, TVs and desktop alike.</span></li>
       </ol>
     </section>
     ${addon ? html`<section class="card">

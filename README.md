@@ -27,9 +27,9 @@ Things to know:
 - **Each profile has its own add-ons**, and its own Cinemeta catalogs (see below).
 - **Refreshing after a switch:** in the Switch profile row, tap the profile's stream
   ("Tap here to refresh Stremio"). Stremio reloads and lands on Home on desktop (after a quick
-  hop through the browser), or on your Library on Android (then go back Home). After switching
-  from the settings page, just click back into the Stremio window. Apps where that doesn't work
-  (older or TV apps) need a close and reopen.
+  hop through the browser), or on your Library on Android phones and Android TV (then go back
+  Home). After switching from the settings page, just click back into the Stremio window. Apps
+  where that doesn't work (older ones) need a close and reopen.
 - **Save before switching** if you finished watching something on another device. Use *Save now*
   on the profile in use, so its latest progress is kept.
 - **Opening a profile in the Switch profile row switches to it.** Stremio asks for the profile's
