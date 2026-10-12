@@ -318,6 +318,7 @@ function profileEditor(d, { csrf, locked }) {
       <div class="editor-section" id="cinemeta">
         <div class="section-head"><h2>Cinemeta</h2>${d.cinemeta?.present ? html`<a href="/profiles/${p.id}/addons#cinemeta-panel">Change</a>` : ''}</div>
         <p class="hint">${d.cinemeta?.present ? describeSettings(d.cinemeta.settings) : `${p.name} doesn't have Cinemeta, Stremio's built-in catalogs.`}</p>
+        ${d.cinemeta?.wrapped ? html`<p class="hint">${p.name} also has ${d.cinemeta.wrappedName}, which shows its own copy of Cinemeta's catalogs.</p>` : ''}
       </div>
 
       <div class="editor-section" id="saved">
@@ -385,7 +386,8 @@ export function wizardAddonRow(a, { checked = false, locked = false } = {}) {
   const note = a.self ? 'The switcher row. Every profile keeps it.'
     : a.from?.length ? `In ${a.from.join(', ')}` : addonDetail(a);
   return html`<li class="addon-row" data-ref="${a.ref}" data-name="${a.name}"
-      data-serves-meta="${a.servesMeta ? '1' : ''}" data-protected="${a.protected || a.self ? '1' : ''}" data-cinemeta="${a.cinemeta ? '1' : ''}">
+      data-serves-meta="${a.servesMeta ? '1' : ''}" data-protected="${a.protected || a.self ? '1' : ''}" data-cinemeta="${a.cinemeta ? '1' : ''}"
+      data-wraps-cinemeta="${a.wrapsCinemeta ? '1' : ''}">
     <span class="grip">${icon.grip}</span>
     <input type="checkbox" name="addon" value="${a.ref}" ${checked ? 'checked' : ''} ${locked ? 'data-locked' : ''} aria-label="Include ${a.name}">
     <span class="addon-tile" style="background:${a.colour}" aria-hidden="true">${a.initial}</span>
@@ -397,6 +399,17 @@ export function wizardAddonRow(a, { checked = false, locked = false } = {}) {
     <button type="button" class="icon-button" data-move="-1" aria-label="Move ${a.name} up">${icon.up}</button>
     <button type="button" class="icon-button" data-move="1" aria-label="Move ${a.name} down">${icon.down}</button>
   </li>`;
+}
+
+/**
+ * A wrapped copy of Cinemeta (a ratings wrapper, say) shows its own Popular,
+ * New and Featured, so rows turned on for the stock Cinemeta appear twice.
+ */
+function wrapperWarning({ name, profile, hidden, action }) {
+  return html`<div class="warn" data-wrapper-warning ${hidden ? 'hidden' : ''}>${icon.alert}<span class="stack-sm">
+    <span>${profile} also has <strong data-wrapper-name>${name}</strong>, which shows its own copy of these catalogs. Rows turned on here appear twice.</span>
+    ${action}
+  </span></div>`;
 }
 
 function cinemetaSwitches(prefix, settings) {
@@ -497,6 +510,7 @@ export function wizardPage({ csrf, account, options, error = null, values = {} }
         <p class="hint" data-cm-none ${start.cinemeta.present ? 'hidden' : ''}>This profile won't have Cinemeta, so there's nothing to set here.</p>
         <div class="switches" data-cm-switches ${start.cinemeta.present ? '' : 'hidden'}>${cinemetaSwitches('cm_', cm)}</div>
         <div class="warn" data-meta-warning hidden>${icon.alert}<span>Details pages are off and none of the ticked add-ons provide them. Titles will open without descriptions or episode lists.</span></div>
+        ${wrapperWarning({ name: 'another add-on', profile: 'This profile', hidden: true, action: html`<button type="button" class="link" data-cm-to-wrapper>Turn Cinemeta's own catalogs off and let it show them</button>` })}
         <p class="hint">You can change these later. Bringing a hidden catalog back fetches Cinemeta again.</p>
       </section>
 
@@ -617,7 +631,12 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
           <p class="hint">Cinemeta is Stremio's built-in catalog add-on. These only change ${p.name}.</p>
           <div class="switches">${cinemetaSwitches('', cinemeta.settings)}</div>
           <div class="warn" data-meta-warning ${cinemeta.settings.removeMeta && !cinemeta.otherMeta ? '' : 'hidden'}>${icon.alert}<span>Details pages are off and no other add-on of ${p.name} provides them. Titles will open without descriptions or episode lists.</span></div>
-          ${cinemeta.wrapped ? html`<p class="hint">${p.name} also has a copy of Cinemeta wrapped by another add-on. These switches don't change that copy.</p>` : ''}
+          ${cinemeta.wrapped ? wrapperWarning({
+            name: cinemeta.wrappedName,
+            profile: p.name,
+            hidden: cinemeta.settings.hidePopular && cinemeta.settings.hideNew && cinemeta.settings.hideFeatured,
+            action: html`<button type="submit" name="preset" value="wrapper" class="link">Let ${cinemeta.wrappedName} show them instead</button>`,
+          }) : ''}
           <div class="row spread">
             <button type="submit" formaction="/profiles/${p.id}/cinemeta/reset" data-confirm-click="Put Cinemeta back exactly as Stremio ships it?">Reset to Stremio's default</button>
             <button type="submit" class="primary">Save</button>

@@ -235,6 +235,27 @@ describe('Cinemeta control per profile', () => {
     assert.deepEqual(alone.warnings, [NO_DETAILS_WARNING]);
   });
 
+  it('with a wrapped Cinemeta too, says so and can hand the catalogs to it', async () => {
+    const { service, fake, original, saved } = await setup();
+    const wrapper = {
+      transportUrl: 'https://ratingswrapper.example/abc/manifest.json',
+      transportName: '',
+      manifest: { ...cinemetaManifest(), id: 'com.linvo.cinemeta.ratings-wrapper', name: 'Cinemeta with Ratings', resources: ['catalog', 'meta'] },
+      flags: {},
+    };
+    fake.addons = [...fake.addons.slice(0, 1), wrapper, ...fake.addons.slice(1)];
+    const manager = await service.addonManager(original.id);
+    assert.equal(manager.cinemeta.wrappedName, 'Cinemeta with Ratings');
+    assert.ok(manager.addons.find((a) => a.name === 'Cinemeta with Ratings').wrapsCinemeta);
+
+    await service.saveCinemeta(original.id, 'wrapper', { base: manager.base });
+    const stock = saved(original.id).addons.find((a) => a.manifest.id === 'com.linvo.cinemeta');
+    assert.deepEqual(deriveSettings(stock.manifest), { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true });
+    assert.ok(stock.manifest.catalogs.some((c) => c.id === 'calendar-videos'), 'calendar catalogs stay');
+    const live = fake.addons.find((a) => a.manifest.id === 'com.linvo.cinemeta.ratings-wrapper');
+    assert.equal(live.manifest.catalogs.length, 8, "the wrapper's own copy is untouched");
+  });
+
   it('reset puts the stock manifest back exactly', async () => {
     const { service, kids, saved } = await setup();
     let editor = await service.editableAddons(kids.id);

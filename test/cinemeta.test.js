@@ -71,7 +71,7 @@ describe('Cinemeta control', () => {
     const wrapped = { transportUrl: `https://ratings.example/${encodeURIComponent(CINEMETA_URL)}/manifest.json`, manifest: { ...cinemetaManifest() } };
     assert.equal(classify(cinemetaAddon()), 'stock');
     assert.equal(classify(wrapped), 'wrapped');
-    assert.deepEqual(findCinemeta([wrapped, cinemetaAddon()]), { index: 1, wrapped: true });
+    assert.deepEqual(findCinemeta([wrapped, cinemetaAddon()]), { index: 1, wrapped: true, wrappedIndex: 0 });
   });
 
   it('knows when another add-on gives details pages', () => {

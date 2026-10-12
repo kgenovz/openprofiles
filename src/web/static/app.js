@@ -344,6 +344,9 @@ if (cinemetaForm) {
     const meta = cinemetaForm.querySelector('[data-cm="meta"]');
     const warning = cinemetaForm.querySelector('[data-meta-warning]');
     if (meta && warning) warning.hidden = meta.checked || cinemetaForm.dataset.otherMeta === '1';
+    // With a wrapped Cinemeta in the list, any row turned on here shows twice.
+    const wrapper = cinemetaForm.querySelector('[data-wrapper-warning]');
+    if (wrapper) wrapper.hidden = !['popular', 'new', 'featured'].some((k) => cinemetaForm.querySelector(`[data-cm="${k}"]`)?.checked);
   });
 }
 
@@ -381,7 +384,21 @@ if (wizard) {
     const metaOn = wizard.querySelector('[data-cm="meta"]').checked;
     const others = rows.some((li) => li.dataset.cinemeta !== '1' && li.dataset.servesMeta === '1');
     wizard.querySelector('[data-meta-warning]').hidden = !hasCinemeta || metaOn || others;
+    // A ticked add-on that wraps Cinemeta shows its own rows, so rows on here would show twice.
+    const wrapper = rows.find((li) => li.dataset.wrapsCinemeta === '1');
+    const rowsOn = ['popular', 'new', 'featured'].some((k) => wizard.querySelector(`[data-cm="${k}"]`).checked);
+    const warning = wizard.querySelector('[data-wrapper-warning]');
+    if (wrapper) warning.querySelector('[data-wrapper-name]').textContent = wrapper.dataset.name;
+    warning.hidden = !(hasCinemeta && wrapper && rowsOn);
   };
+
+  // "Let it show them": stock Cinemeta's rows and search off, details too if the wrapper gives them.
+  wizard.querySelector('[data-cm-to-wrapper]').addEventListener('click', () => {
+    const wrapper = ticked().find((li) => li.dataset.wrapsCinemeta === '1');
+    for (const k of ['popular', 'new', 'featured', 'search']) wizard.querySelector(`[data-cm="${k}"]`).checked = false;
+    if (wrapper?.dataset.servesMeta === '1') wizard.querySelector('[data-cm="meta"]').checked = false;
+    syncCinemeta();
+  });
 
   // A new start re-ticks the add-ons in its order and sets Cinemeta its way.
   const applyStart = () => {

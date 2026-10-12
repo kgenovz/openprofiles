@@ -509,6 +509,8 @@ input[role="switch"]:checked::after { transform: translateX(22px); }
 }
 .warn[hidden] { display: none; }
 .warn svg { flex: none; margin-top: 2px; }
+.stack-sm { display: grid; gap: 6px; justify-items: start; }
+.warn button.link { color: inherit; font-weight: 700; }
 
 /* The wizard */
 .wizard { max-width: 880px; width: 100%; margin: 0 auto; gap: 18px; }

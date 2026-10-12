@@ -299,7 +299,8 @@ export function createApp({ config, db, accounts, log }) {
   }, (req) => `/profiles/${idParam(req)}/addons`));
 
   r.post('/profiles/:id/cinemeta', action(async (req) => {
-    const result = await req.service.saveCinemeta(idParam(req), cinemetaFromForm(req.body), { base: String(req.body.base || '') });
+    const wanted = req.body.preset === 'wrapper' ? 'wrapper' : cinemetaFromForm(req.body);
+    const result = await req.service.saveCinemeta(idParam(req), wanted, { base: String(req.body.base || '') });
     return editResult(result, 'Cinemeta');
   }, (req) => `/profiles/${idParam(req)}/addons#cinemeta-panel`));
 

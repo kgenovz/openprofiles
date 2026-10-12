@@ -6,7 +6,7 @@ import {
 } from './addons.js';
 import {
   CINEMETA_ID, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
-  needsStock, sameSettings,
+  needsStock, sameSettings, settingsForWrapper,
 } from './cinemeta.js';
 import { sealExport, openExport } from './exporter.js';
 import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
@@ -382,7 +382,7 @@ export class ProfilesService {
     const { profile, active, addons, base } = await this.editableAddons(profileId);
     const own = new Set(addons.map(addonRef));
     const others = addonPool(this.savedAddonLists({ skip: profileId }));
-    const { index, wrapped } = findCinemeta(addons);
+    const { index, wrapped, wrappedIndex } = findCinemeta(addons);
     return {
       profile,
       active,
@@ -393,6 +393,7 @@ export class ProfilesService {
       cinemeta: {
         present: index !== -1,
         wrapped,
+        wrappedName: wrapped ? String(addons[wrappedIndex].manifest?.name || 'Another add-on') : null,
         settings: index === -1 ? null : deriveSettings(addons[index].manifest),
         otherMeta: anotherAddonServesMeta(addons, index),
       },
@@ -425,14 +426,23 @@ export class ProfilesService {
   }
 
   /** Change how Cinemeta behaves in one profile (settings from cinemeta.js). */
-  saveCinemeta(profileId, settings, { base }) {
+  /**
+   * Change how Cinemeta behaves in one profile (settings from cinemeta.js).
+   * `'wrapper'` instead of settings hands Cinemeta's job to the wrapped copy in
+   * the list (see settingsForWrapper), so nothing shows twice.
+   */
+  saveCinemeta(profileId, wanted, { base }) {
     return this.editAddons(profileId, {
       base,
       editKind: 'cinemeta',
       label: (p) => `Before changing ${p.name}'s Cinemeta`,
       change: async (current, profile) => {
-        const { index } = findCinemeta(current);
+        const { index, wrappedIndex } = findCinemeta(current);
         if (index === -1) throw new UserError('NO_CINEMETA', `${profile.name} doesn't have Cinemeta, so there's nothing to change.`);
+        if (wanted === 'wrapper' && wrappedIndex === -1) {
+          throw new UserError('NO_WRAPPER', `${profile.name} has no other copy of Cinemeta to hand the catalogs to.`);
+        }
+        const settings = wanted === 'wrapper' ? settingsForWrapper(current[wrappedIndex]) : wanted;
         const warnings = [];
         const addons = await this.applyCinemeta(current, settings, warnings);
         const what = describeChanges(deriveSettings(current[index].manifest), settings);

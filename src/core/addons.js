@@ -69,6 +69,7 @@ export function describeAddon(addon) {
     protected: isProtectedAddon(addon),
     self: isSelfAddon(addon),
     cinemeta: classify(addon) === 'stock',
+    wrapsCinemeta: classify(addon) === 'wrapped',
     servesMeta: servesMeta(m),
     onDevice: runsOnDevice(addon),
     initial: name.trim().charAt(0).toUpperCase() || '?',
@@ -87,8 +88,13 @@ export const addonsHash = (addons) => crypto.createHash('sha256').update(JSON.st
 
 /** Cinemeta's settings in a list, or null when the list has no stock Cinemeta. */
 export function cinemetaOf(addons) {
-  const { index, wrapped } = findCinemeta(addons);
-  return { present: index !== -1, wrapped, settings: index === -1 ? null : deriveSettings(addons[index].manifest) };
+  const { index, wrapped, wrappedIndex } = findCinemeta(addons);
+  return {
+    present: index !== -1,
+    wrapped,
+    wrappedName: wrapped ? String(addons[wrappedIndex].manifest?.name || 'Another add-on') : null,
+    settings: index === -1 ? null : deriveSettings(addons[index].manifest),
+  };
 }
 
 /**

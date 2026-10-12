@@ -64,16 +64,20 @@ export function classify(addon) {
   return null;
 }
 
-/** Index of the stock Cinemeta in a list (-1 if none), and whether a wrapped copy is there too. */
+/**
+ * Index of the stock Cinemeta in a list (-1 if none), and of the first copy
+ * another add-on wraps (a ratings wrapper, say). A wrapped copy shows its own
+ * Popular / New / Featured, so with both in a list each row can appear twice.
+ */
 export function findCinemeta(addons) {
   let index = -1;
-  let wrapped = false;
+  let wrappedIndex = -1;
   (addons || []).forEach((a, i) => {
     const kind = classify(a);
     if (kind === 'stock' && index === -1) index = i;
-    else if (kind === 'wrapped') wrapped = true;
+    else if (kind === 'wrapped' && wrappedIndex === -1) wrappedIndex = i;
   });
-  return { index, wrapped };
+  return { index, wrapped: wrappedIndex !== -1, wrappedIndex };
 }
 
 const catalogsOf = (m) => (Array.isArray(m?.catalogs) ? m.catalogs.filter(isObject) : []);
@@ -190,6 +194,22 @@ export function buildManifest({ current, stock = null, settings }) {
   if (!settings.removeMeta && !resources.some(isMeta)) resources = [...resources, 'meta'];
 
   return { ...clone(base), catalogs, resources };
+}
+
+/**
+ * Settings that leave Cinemeta's job to a wrapped copy: stock Cinemeta's rows
+ * off, and its search and details pages off too wherever the wrapper gives
+ * them (so search results and details pages aren't doubled either).
+ */
+export function settingsForWrapper(wrapper) {
+  const m = wrapper?.manifest;
+  return {
+    hidePopular: true,
+    hideNew: true,
+    hideFeatured: true,
+    removeSearch: catalogsOf(m).some((c) => searchExtra(c) !== null),
+    removeMeta: anotherAddonServesMeta([wrapper], -1),
+  };
 }
 
 /** Does any other add-on in the list give details pages for movies or series? */
