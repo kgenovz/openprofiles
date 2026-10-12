@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 (2026-10-12)
+
+- **Phones:** each profile is one compact row (picture on its colour at the left, name and
+  buttons beside it), so a whole household fits on one screen.
+- README: a demo of switching on a phone, and the Switch profile row in Stremio.
+
 ## 1.0.0 (2026-10-12)
 
 The first release. OpenProfiles gives a free Stremio account profiles: each one keeps its own

@@ -10,7 +10,9 @@ affiliated with Stremio. To try it first, there's a free shared server at
 [privacy page](https://openprofiles.kgenovz.com/privacy) says what it keeps. Running your own is
 recommended: it's light, and then your add-on links never leave your hands.
 
-![The Profiles page: four profiles, each with its own picture and colour](docs/screenshots/profiles.png)
+<p align="center">
+  <img src="docs/screenshots/demo.gif" width="300" alt="On an Android phone: opening Kids in the Switch profile row switches the account, a tap refreshes Stremio, and Kids' library and Home appear; switching back to Kyle works the same way">
+</p>
 
 > **Have Stremio Supporter?** Use Stremio's own profiles instead. They work on several devices
 > at the same time; OpenProfiles can't.
@@ -25,6 +27,10 @@ each profile. When you switch, it:
 
 1. saves the account as it is now into the profile you're leaving (and takes a backup),
 2. writes the profile you picked into the account: library, add-ons and notifications.
+
+![The Switch profile row on Stremio's Home, with a profile for Kyle and one for Kids](docs/screenshots/stremio-row.jpg)
+
+![The Profiles page: four profiles, each with its own picture and colour](docs/screenshots/profiles.png)
 
 Things to know:
 
