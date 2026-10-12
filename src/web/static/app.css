@@ -165,8 +165,17 @@ p { margin: 0 0 8px; }
   place-items: center;
 }
 .profile-banner img { height: 100%; width: auto; display: block; }
-@media (max-width: 520px) {
-  .profile-banner { aspect-ratio: 5 / 2; }
+/* Phones: one compact row per profile (picture on its colour at the left), so a whole
+   household fits on one screen. */
+@media (max-width: 560px) {
+  .grid { grid-template-columns: 1fr; gap: 10px; }
+  .profile { display: grid; grid-template-columns: 96px minmax(0, 1fr); }
+  .profile-banner { aspect-ratio: auto; height: 100%; min-height: 104px; }
+  .profile-banner img { width: 84px; height: 84px; }
+  .profile-banner .pill { top: auto; bottom: 6px; left: 50%; transform: translateX(-50%); padding: 1px 8px; font-size: 11px; white-space: nowrap; }
+  .profile-body { padding: 12px; gap: 10px; align-content: center; }
+  .profile-body h3 { overflow-wrap: anywhere; }
+  .grid .new-tile { min-height: 64px; flex-direction: row; }
 }
 
 /* Picture picker */
