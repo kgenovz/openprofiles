@@ -30,9 +30,22 @@ export const timeOf = (value) => {
   return Number.isNaN(t) ? 0 : t;
 };
 
-/** Part-way through and watched in the last IN_FLIGHT_MS: maybe still playing on a device. */
+/**
+ * Started this recently with no position saved yet. The player marks a title the moment it
+ * starts (lastWatched, position 0) and saves its first position up to 3 minutes in, so a
+ * switch right after someone pressed play sees no progress at all.
+ */
+export const JUST_STARTED_MS = 5 * 60 * 1000;
+
+/**
+ * Maybe still playing on a device: part-way through and watched in the last IN_FLIGHT_MS,
+ * or started in the last JUST_STARTED_MS and not saved yet.
+ */
 export function isInFlight(item, now) {
-  return hasId(item) && item.state?.timeOffset > 0 && now - timeOf(item.state.lastWatched) <= IN_FLIGHT_MS;
+  if (!hasId(item)) return false;
+  const age = now - timeOf(item.state?.lastWatched);
+  if (item.state?.timeOffset > 0) return age <= IN_FLIGHT_MS;
+  return Boolean(item.state?.video_id) && age <= JUST_STARTED_MS;
 }
 
 /** `tt1:2:5` of item `tt1` → [2, 5]; `kitsu:7:3` of `kitsu:7` → [3]; anything else → null. */

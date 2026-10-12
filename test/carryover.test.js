@@ -146,6 +146,30 @@ describe('titles still playing on another device after a switch', () => {
     assert.equal(fake.library.get('tt-show').state.video_id, 'tt-show:1:3');
   });
 
+  it('a title started just before the switch, with no position saved yet, is followed too', async () => {
+    const ctx = await linkedWithKids();
+    const { service, repo, fake, kids, original } = ctx;
+    // Play pressed half a minute ago: the player marked it, position 0.
+    const started = playing('tt-new', { offset: 0, at: service.now() - 30 * 1000 });
+    fake.seed({ library: [started] });
+
+    await service.switchTo(kids.id);
+    assert.equal(repo.listCarryovers()[0]?.ownerProfileId, original.id);
+
+    ctx.advance(3 * MIN);
+    tvSavesRebuilt(ctx, 'tt-new', { offset: 3 * MIN, video: 'tt-new' });
+    await service.switchTo(original.id);
+    assert.equal(fake.library.get('tt-new').state.timeOffset, 3 * MIN, 'Original gets the first saved position');
+    assert.equal(countContinueWatching(saved(repo, kids.id)), 0, "not in Kids' Continue Watching");
+  });
+
+  it('a title marked as started long ago with no position is not followed', async () => {
+    const ctx = await linkedWithKids();
+    ctx.fake.seed({ library: [playing('tt-old', { offset: 0, at: ctx.service.now() - 10 * MIN })] });
+    await ctx.service.switchTo(ctx.kids.id);
+    assert.deepEqual(ctx.repo.listCarryovers(), []);
+  });
+
   it("titles not watched in the last half hour aren't followed, so nothing is checked", async () => {
     const { service, repo, fake, kids } = await linkedWithKids();
     await service.switchTo(kids.id);
