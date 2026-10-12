@@ -180,7 +180,13 @@ function undoBanner(undo, csrf) {
   const what = undo.edit_kind === 'cinemeta' ? 'Cinemeta' : 'add-ons';
   return html`<div class="undo" role="status">
     <span>Changed ${undo.profile_name}'s ${what} ${ago(undo.created_at)}. A backup was taken first.</span>
-    ${postButton({ action: `/edits/${undo.id}/undo`, csrf, label: 'Undo', style: 'undo-button' })}
+    <span class="row">
+      ${postButton({ action: `/edits/${undo.id}/undo`, csrf, label: 'Undo', style: 'undo-button' })}
+      <form method="post" action="/edits/${undo.id}/hide" class="inline" data-undo-hide>
+        ${csrfField(csrf)}
+        <button type="submit" class="undo-button undo-hide" aria-label="Hide this bar (undo stays on the Backups tab)">Hide</button>
+      </form>
+    </span>
   </div>`;
 }
 
@@ -572,6 +578,30 @@ export function managerAddonRow(a, { isNew = false } = {}) {
   </li>`;
 }
 
+/**
+ * Where details pages come from, and a way to pick another source. Stremio
+ * takes them from the first add-on in the list that gives them, so the pick
+ * moves to the top (and Cinemeta's own details go off unless it's the pick).
+ */
+function metadataCard(p, metadata, { csrf, base }) {
+  return html`<form method="post" action="/profiles/${p.id}/metadata" class="card" id="metadata" data-metadata-form aria-label="${p.name}'s metadata">
+    ${csrfField(csrf)}
+    <input type="hidden" name="base" value="${base}">
+    <h2>${p.name} · Metadata</h2>
+    <p class="hint">${metadata.currentName
+      ? html`Details pages (descriptions, cast, episode lists) come from <strong>${metadata.currentName}</strong>.`
+      : `No add-on of ${p.name} gives details pages for movies and series, so titles open without them.`}</p>
+    ${metadata.options.length > 1 || (metadata.options.length === 1 && !metadata.current) ? html`<div class="add-by-link">
+      <label class="grow">Get details pages from
+        <select name="source" data-current="${metadata.current ?? ''}">
+          ${metadata.options.map((o) => html`<option value="${o.ref}" ${o.ref === metadata.current ? 'selected' : ''}>${o.name}</option>`)}
+        </select></label>
+      <button type="submit" data-metadata-go>Change</button>
+    </div>
+    <p class="hint">The add-on you pick moves to the top of the list. Cinemeta's own details pages turn off, unless you pick Cinemeta.</p>` : ''}
+  </form>`;
+}
+
 export function addonManagerPage({ csrf, account, flash, manager, undo }) {
   const { profile: p, active, base, addons, pool, cinemeta } = manager;
   return layout({
@@ -622,6 +652,8 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
         </div>
       </form>
 
+      <div class="side-panels">
+      ${metadataCard(p, manager.metadata, { csrf, base })}
       <form method="post" action="/profiles/${p.id}/cinemeta" class="card cinemeta-panel" id="cinemeta-panel" data-cinemeta-form
           data-other-meta="${cinemeta.otherMeta ? '1' : ''}" aria-label="${p.name}'s Cinemeta">
         ${csrfField(csrf)}
@@ -637,24 +669,13 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
             hidden: cinemeta.settings.hidePopular && cinemeta.settings.hideNew && cinemeta.settings.hideFeatured,
             action: html`<button type="submit" name="handoff" value="${cinemeta.wrappedRef}" class="link">Let ${cinemeta.wrappedName} show them instead</button>`,
           }) : ''}
-          ${cinemeta.detailsFrom ? html`<p class="hint">Details pages come from <strong>${cinemeta.detailsFrom.name}</strong>, the first add-on in the list that gives them. Move add-ons up or down to change that.</p>` : ''}
-          ${cinemeta.handoffs.length ? html`<div class="handoff">
-            <div class="add-by-link">
-              <label class="grow">Hand Cinemeta's job to
-                <select name="handoff">
-                  <option value="">Keep Cinemeta</option>
-                  ${cinemeta.handoffs.map((h) => html`<option value="${h.ref}">${h.name}</option>`)}
-                </select></label>
-              <button type="submit">Hand over</button>
-            </div>
-            <p class="hint">Turns off Cinemeta's own catalogs, search and details pages, so they come from that add-on alone.</p>
-          </div>` : ''}
           <div class="row spread">
             <button type="submit" formaction="/profiles/${p.id}/cinemeta/reset" data-confirm-click="Put Cinemeta back exactly as Stremio ships it?">Reset to Stremio's default</button>
             <button type="submit" class="primary">Save</button>
           </div>`
         : html`<p class="hint">${p.name} doesn't have Cinemeta${cinemeta.wrapped ? ' (only a copy wrapped by another add-on, which these settings can\'t change)' : ''}.</p>`}
       </form>
+      </div>
     </div>`,
   });
 }

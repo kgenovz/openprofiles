@@ -92,6 +92,14 @@ describe('web pages', () => {
     const after1 = (await b.request(`/profiles/${kids.id}/addons`)).text;
     assert.match(after1, /Saved Kids&#39;s add-ons/);
     const undo = after1.match(/action="\/edits\/(\d+)\/undo"/)[1];
+
+    // Hide only hides the bar, in this browser; undo still works.
+    await b.post(`/edits/${undo}/hide`);
+    assert.doesNotMatch((await b.request(`/profiles/${kids.id}/addons`)).text, /\/edits\/\d+\/undo/);
+    const other = new Browser(base);
+    await other.signIn();
+    assert.match((await other.request(`/profiles/${kids.id}/addons`)).text, /\/edits\/\d+\/undo/, 'another browser still shows it');
+
     await b.post(`/edits/${undo}/undo`);
     assert.deepEqual(saved(kids.id).addons.map((a) => a.manifest.name), ['tmdb', 'Cinemeta', 'OpenProfiles']);
   });

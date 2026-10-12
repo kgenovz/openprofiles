@@ -147,12 +147,17 @@ export function createApp({ config, db, accounts, log }) {
 
   const page = (req, extra = {}) => ({ csrf: req.session.csrf, account: req.service.status().account, flash: auth.takeFlash(req), ...extra });
   const notFound = (res, message) => sendPage(res, errorPage({ status: 404, message }), 404);
+  /** The Undo bar's edit, unless this browser hid the bar for it. */
+  const undoFor = (req) => {
+    const undo = req.service.latestUndo();
+    return undo && undo.id !== auth.hiddenUndo(req) ? undo : null;
+  };
 
   // ── Profiles tab ───────────────────────────────────────────────────────────
 
   r.get('/configure', (req, res) => {
     const status = req.service.status();
-    return sendPage(res, profilesPage({ ...page(req), status, addon: req.service.addonInfo(), undo: req.service.latestUndo() }));
+    return sendPage(res, profilesPage({ ...page(req), status, addon: req.service.addonInfo(), undo: undoFor(req) }));
   });
 
   r.get('/profiles/new', async (req, res) => {
@@ -227,7 +232,7 @@ export function createApp({ config, db, accounts, log }) {
     if (!req.service.repo.getProfile(id)) return notFound(res, 'That profile no longer exists.');
     const status = req.service.status();
     return sendPage(res, profilesPage({
-      ...page(req), status, addon: req.service.addonInfo(), undo: req.service.latestUndo(), editing: req.service.profileDetails(id),
+      ...page(req), status, addon: req.service.addonInfo(), undo: undoFor(req), editing: req.service.profileDetails(id),
     }));
   });
 
@@ -270,7 +275,7 @@ export function createApp({ config, db, accounts, log }) {
     if (!req.service.repo.getProfile(id)) return notFound(res, 'That profile no longer exists.');
     try {
       const manager = await req.service.addonManager(id);
-      return sendPage(res, addonManagerPage({ ...page(req), manager, undo: req.service.latestUndo() }));
+      return sendPage(res, addonManagerPage({ ...page(req), manager, undo: undoFor(req) }));
     } catch (err) {
       if (!err.userMessage) log.error('Add-on manager failed to load', { error: err.message });
       auth.setFlash(req, { type: 'error', text: userMessageOf(err) });
@@ -305,6 +310,15 @@ export function createApp({ config, db, accounts, log }) {
     return editResult(result, 'Cinemeta');
   }, (req) => `/profiles/${idParam(req)}/addons#cinemeta-panel`));
 
+  r.post('/profiles/:id/metadata', action(async (req) => {
+    const result = await req.service.setMetadataSource(idParam(req), String(req.body.source || ''), { base: String(req.body.base || '') });
+    if (!result.changed) return { text: `Details pages already come from ${result.sourceName}.` };
+    return {
+      text: `${result.profile.name}'s details pages now come from ${result.sourceName}${result.active ? ', in Stremio too' : ''}.`,
+      details: result.warnings,
+    };
+  }, (req) => `/profiles/${idParam(req)}/addons#metadata`));
+
   r.post('/profiles/:id/cinemeta/reset', action(async (req) => {
     const result = await req.service.resetCinemeta(idParam(req), { base: String(req.body.base || '') });
     return editResult(result, 'Cinemeta');
@@ -319,6 +333,13 @@ export function createApp({ config, db, accounts, log }) {
     const row = req.body?.for === 'wizard' ? wizardAddonRow(found, { checked: true }) : managerAddonRow(found, { isNew: true });
     return { ref: found.ref, name: found.name, html: String(row) };
   }));
+
+  // Hide the Undo bar for this edit in this browser. The page script sends it in the background.
+  r.post('/edits/:id/hide', (req, res) => {
+    auth.hideUndo(res, idParam(req));
+    if (req.get('x-requested-with') === 'fetch') return res.status(204).end();
+    return res.redirect(303, '/configure');
+  });
 
   r.post('/edits/:id/undo', action(async (req) => {
     const what = req.service.repo.getBackup(idParam(req))?.edit_kind === 'cinemeta' ? 'Cinemeta is' : 'add-ons are';
@@ -344,7 +365,7 @@ export function createApp({ config, db, accounts, log }) {
   // ── Backups tab ────────────────────────────────────────────────────────────
 
   r.get('/backups', (req, res) => sendPage(res, backupsPage({
-    ...page(req), backups: req.service.listBackups(), bin: req.service.listBin(), undo: req.service.latestUndo(),
+    ...page(req), backups: req.service.listBackups(), bin: req.service.listBin(), undo: undoFor(req),
   })));
 
   r.post('/backups', action(async (req) => {

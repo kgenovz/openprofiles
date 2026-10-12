@@ -1,6 +1,7 @@
 import { randomToken, safeEqual, sha256 } from '../crypto.js';
 
 const COOKIE = 'op_session';
+const UNDO_HIDDEN_COOKIE = 'op_undo_hidden';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TOUCH_EVERY_MS = 5 * 60 * 1000;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
@@ -148,6 +149,18 @@ export function createAuth({ db, config, now = () => Date.now() }) {
 
     setFlash(req, flash) {
       q.setFlash.run(JSON.stringify(flash), req.session.idHash);
+    },
+
+    /** The edit whose Undo bar this browser hid (a later edit shows the bar again). */
+    hiddenUndo(req) {
+      return Number(parseCookies(req.headers.cookie)[UNDO_HIDDEN_COOKIE]) || null;
+    },
+
+    hideUndo(res, backupId) {
+      res.append('Set-Cookie', [
+        `${UNDO_HIDDEN_COOKIE}=${Number(backupId)}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=86400',
+        ...(secureCookie ? ['Secure'] : []),
+      ].join('; '));
     },
 
     takeFlash(req) {

@@ -328,6 +328,8 @@ td { padding: 10px 6px; border-top: 1px solid var(--border); vertical-align: top
   padding: 10px 16px; border-radius: var(--radius-sm); background: var(--ok-bg); color: var(--ok-text); font-size: 15px;
 }
 .undo-button { min-height: 36px; padding: 0 14px; background: transparent; border-color: currentColor; color: inherit; font-weight: 700; }
+.undo .row { gap: 8px; }
+.undo-hide { border-color: transparent; font-weight: 600; opacity: 0.85; }
 
 /* Profiles: cards link to the editor */
 .profile-actions { flex-wrap: nowrap; gap: 8px; }
@@ -474,8 +476,6 @@ main.wide { max-width: 1240px; }
 .has-changes .savebar { border-color: var(--accent); }
 .savebar [hidden] { display: none; }
 .spread { justify-content: space-between; }
-.cinemeta-panel { position: sticky; top: 16px; }
-@media (max-width: 980px) { .cinemeta-panel { position: static; } }
 
 select {
   font: inherit; color: var(--text); background: var(--bg);
@@ -510,8 +510,7 @@ input[role="switch"]:checked::after { transform: translateX(22px); }
 .warn[hidden] { display: none; }
 .warn svg { flex: none; margin-top: 2px; }
 .stack-sm { display: grid; gap: 6px; justify-items: start; }
-.handoff { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 14px; }
-.handoff p { margin: 0; }
+.side-panels { display: grid; gap: 24px; align-content: start; }
 .warn button.link { color: inherit; font-weight: 700; }
 
 /* The wizard */

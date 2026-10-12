@@ -6,7 +6,7 @@ import {
 } from './addons.js';
 import {
   CINEMETA_ID, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
-  detailsSource, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
+  detailsSource, givesTitleDetails, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
 } from './cinemeta.js';
 import { sealExport, openExport } from './exporter.js';
 import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
@@ -399,10 +399,13 @@ export class ProfilesService {
         wrappedRef: wrapped ? addonRef(addons[wrappedIndex]) : null,
         settings: index === -1 ? null : deriveSettings(addons[index].manifest),
         otherMeta: anotherAddonServesMeta(addons, index),
-        // Where details pages come from: the first add-on in the list that gives them.
-        detailsFrom: details === -1 ? null : { name: nameOf(addons[details]), cinemeta: details === index },
-        // Add-ons that can take over Cinemeta's whole job (clones, TMDB, AIOMetadata…).
-        handoffs: addons.filter((a, i) => i !== index && !isSelfAddon(a) && (isFullMetadata(a) || i === wrappedIndex))
+      },
+      // Where details pages come from (the first add-on in the list that gives them),
+      // and every add-on that could: Cinemeta, clones, TMDB, AIOMetadata…
+      metadata: {
+        current: details === -1 ? null : addonRef(addons[details]),
+        currentName: details === -1 ? null : nameOf(addons[details]),
+        options: addons.filter((a, i) => !isSelfAddon(a) && (i === index || givesTitleDetails(a)))
           .map((a) => ({ ref: addonRef(a), name: nameOf(a) })),
       },
     };
@@ -463,6 +466,41 @@ export class ProfilesService {
         return { addons, warnings, activity: `Changed ${profile.name}'s Cinemeta${why}: ${what.join(', ') || 'no change'}` };
       },
     });
+  }
+
+  /**
+   * Make one add-on the source of details pages: it moves to the top of the
+   * list (Stremio takes details from the first add-on that gives them), and
+   * Cinemeta's own details pages go off, or back on when Cinemeta is the one
+   * picked. Catalogs and search are left as they are.
+   */
+  async setMetadataSource(profileId, ref, { base }) {
+    let sourceName = null;
+    const result = await this.editAddons(profileId, {
+      base,
+      editKind: 'addons',
+      label: (p) => `Before changing where ${p.name}'s details pages come from`,
+      change: async (current, profile) => {
+        const { index } = findCinemeta(current);
+        const pick = current.findIndex((a) => addonRef(a) === ref);
+        if (pick === -1 || isSelfAddon(current[pick]) || !(pick === index || givesTitleDetails(current[pick]))) {
+          throw new UserError('NO_METADATA', `That add-on can't give ${profile.name}'s details pages. Reload the page and try again.`);
+        }
+        const name = current[pick].manifest?.name || 'that add-on';
+        sourceName = name;
+        const warnings = [];
+        let list = current;
+        if (index !== -1) {
+          const now = deriveSettings(current[index].manifest);
+          list = await this.applyCinemeta(current, { ...now, removeMeta: pick !== index }, warnings);
+        }
+        const out = list.slice();
+        const [chosen] = out.splice(pick, 1);
+        out.unshift(chosen);
+        return { addons: out, warnings, activity: `${profile.name}'s details pages now come from ${name}` };
+      },
+    });
+    return { ...result, sourceName };
   }
 
   /** Put Cinemeta back exactly as Stremio ships it. Refuses if the stock copy can't be fetched. */

@@ -248,8 +248,6 @@ describe('Cinemeta control per profile', () => {
     assert.equal(manager.cinemeta.wrappedName, 'Cinemeta with Ratings');
     assert.ok(manager.addons.find((a) => a.name === 'Cinemeta with Ratings').wrapsCinemeta);
 
-    assert.equal(manager.cinemeta.detailsFrom.name, 'Cinemeta', 'stock Cinemeta is first, so it gives details pages');
-    assert.deepEqual(manager.cinemeta.handoffs.map((h) => h.name), ['Cinemeta with Ratings']);
     await service.saveCinemeta(original.id, { handoff: manager.cinemeta.wrappedRef }, { base: manager.base });
     const stock = saved(original.id).addons.find((a) => a.manifest.id === 'com.linvo.cinemeta');
     assert.deepEqual(deriveSettings(stock.manifest), { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true });
@@ -258,23 +256,33 @@ describe('Cinemeta control per profile', () => {
     assert.equal(live.manifest.catalogs.length, 8, "the wrapper's own copy is untouched");
   });
 
-  it('can hand Cinemeta\'s job to a full metadata add-on like AIOMetadata, and not to one that only streams', async () => {
+  it("changes where details pages come from: the pick moves to the top and Cinemeta's details go off, or back on", async () => {
     const { service, fake, original, saved } = await setup();
-    const aio = richAddon('AIOMetadata', {
-      resources: ['catalog', { name: 'meta', types: ['movie', 'series'], idPrefixes: ['tt', 'tmdb:'] }],
-      catalogs: [{ type: 'movie', id: 'aio.search', name: 'Search', extra: [{ name: 'search', isRequired: true }] }],
-    });
+    const aio = richAddon('AIOMetadata', { resources: ['catalog', { name: 'meta', types: ['movie', 'series'], idPrefixes: ['tt', 'tmdb:'] }] });
     fake.addons = [...fake.addons, aio];
     let manager = await service.addonManager(original.id);
-    assert.deepEqual(manager.cinemeta.handoffs.map((h) => h.name), ['AIOMetadata']);
+    assert.equal(manager.metadata.currentName, 'Cinemeta', 'stock Cinemeta is first, so it gives details pages');
+    assert.deepEqual(manager.metadata.options.map((o) => o.name), ['Cinemeta', 'tmdb', 'Local Files', 'AIOMetadata']);
     const debrid = manager.addons.find((a) => a.name === 'debrid');
-    await assert.rejects(service.saveCinemeta(original.id, { handoff: debrid.ref }, { base: manager.base }), (e) => e.code === 'NO_HANDOFF');
+    await assert.rejects(service.setMetadataSource(original.id, debrid.ref, { base: manager.base }), (e) => e.code === 'NO_METADATA');
 
-    await service.saveCinemeta(original.id, { handoff: manager.cinemeta.handoffs[0].ref }, { base: manager.base });
-    const stock = saved(original.id).addons[0].manifest;
-    assert.deepEqual(deriveSettings(stock), { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true });
+    const pick = manager.metadata.options.find((o) => o.name === 'AIOMetadata').ref;
+    const result = await service.setMetadataSource(original.id, pick, { base: manager.base });
+    assert.equal(result.sourceName, 'AIOMetadata');
+    let list = saved(original.id).addons;
+    assert.equal(list[0].manifest.name, 'AIOMetadata', 'moved to the top');
+    const stock = list.find((a) => a.manifest.id === 'com.linvo.cinemeta').manifest;
+    assert.equal(deriveSettings(stock).removeMeta, true, "Cinemeta's details off");
+    assert.equal(deriveSettings(stock).hidePopular, false, 'its catalogs stay');
     manager = await service.addonManager(original.id);
-    assert.equal(manager.cinemeta.detailsFrom.name, 'tmdb', 'now the first add-on with details pages is TMDB');
+    assert.equal(manager.metadata.currentName, 'AIOMetadata');
+    assert.equal((await service.setMetadataSource(original.id, pick, { base: manager.base })).changed, false, 'picking the current one changes nothing');
+
+    const cinemeta = manager.metadata.options.find((o) => o.name === 'Cinemeta').ref;
+    await service.setMetadataSource(original.id, cinemeta, { base: manager.base });
+    list = saved(original.id).addons;
+    assert.equal(list[0].manifest.name, 'Cinemeta');
+    assert.equal(deriveSettings(list[0].manifest).removeMeta, false, "Cinemeta's details back on");
   });
 
   it('reset puts the stock manifest back exactly', async () => {

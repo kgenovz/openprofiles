@@ -5,7 +5,7 @@ const STREMIO_PASSWORD = 'hunter22';
 export class Browser {
   constructor(base) {
     this.base = base;
-    this.cookie = '';
+    this.jar = new Map();
   }
 
   async request(path, { method = 'GET', form } = {}) {
@@ -18,9 +18,16 @@ export class Browser {
       },
       body: form ? new URLSearchParams(form).toString() : undefined,
     });
-    const set = res.headers.get('set-cookie');
-    if (set) this.cookie = set.split(';')[0];
+    for (const set of res.headers.getSetCookie()) {
+      const [pair] = set.split(';');
+      const i = pair.indexOf('=');
+      this.jar.set(pair.slice(0, i), pair.slice(i + 1));
+    }
     return { status: res.status, location: res.headers.get('location'), headers: res.headers, text: await res.text() };
+  }
+
+  get cookie() {
+    return [...this.jar].filter(([, v]) => v !== '').map(([k, v]) => `${k}=${v}`).join('; ');
   }
 
   async csrf() {

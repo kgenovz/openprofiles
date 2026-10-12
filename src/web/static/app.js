@@ -2,6 +2,17 @@
 // state so a slow switch isn't submitted twice.
 document.addEventListener('submit', (event) => {
   const form = event.target;
+  // Hiding the Undo bar happens in the background, without reloading the page.
+  if (form.matches('[data-undo-hide]')) {
+    event.preventDefault();
+    form.closest('.undo')?.remove();
+    fetch(form.action, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-requested-with': 'fetch' },
+      body: new URLSearchParams(new FormData(form)),
+    }).catch(() => {});
+    return;
+  }
   const question = event.submitter?.dataset.confirmClick || form.getAttribute('data-confirm');
   if (question && !window.confirm(question)) {
     event.preventDefault();
@@ -348,6 +359,16 @@ if (cinemetaForm) {
     const wrapper = cinemetaForm.querySelector('[data-wrapper-warning]');
     if (wrapper) wrapper.hidden = !['popular', 'new', 'featured'].some((k) => cinemetaForm.querySelector(`[data-cm="${k}"]`)?.checked);
   });
+}
+
+// Metadata card: "Change" only does something when another add-on is picked.
+const metadataForm = document.querySelector('[data-metadata-form]');
+if (metadataForm) {
+  const select = metadataForm.querySelector('select[name="source"]');
+  const go = metadataForm.querySelector('[data-metadata-go]');
+  const sync = () => { if (select && go) go.disabled = select.value === select.dataset.current; };
+  metadataForm.addEventListener('change', sync);
+  sync();
 }
 
 // ── the new-profile wizard ──────────────────────────────────────────────────
