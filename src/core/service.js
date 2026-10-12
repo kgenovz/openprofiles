@@ -44,6 +44,12 @@ const FETCH_BUDGET = 80;
 // An everything import keeps at most this many of the file's backups (the newest).
 const IMPORT_MAX_BACKUPS = 15;
 const FETCH_WINDOW_MS = 10 * 60 * 1000;
+// Trips to Stremio an account may start in a window: page loads that read Stremio, switches (from
+// Stremio too), saves, edits, backups. Plenty for a person; too few for a loop to get the server's
+// address throttled by Stremio, which would break switching for everyone on it. Finishing or
+// undoing an interrupted switch and the daily backup don't count.
+export const STREMIO_BUDGET = 60;
+const STREMIO_WINDOW_MS = 10 * 60 * 1000;
 
 export const NO_DETAILS_WARNING =
   "Details pages are off and no other add-on in this profile gives them for IMDb-id titles, so those will open without descriptions or episode lists. That is fine if the profile only uses another add-on's ids (e.g. TMDB ids).";
@@ -120,6 +126,17 @@ export class ProfilesService {
     // Add-ons fetched by link, held so the page can refer to them by ref until saved.
     this.addonStash = new Map();
     this.fetchTimes = [];
+    this.stremioTimes = [];
+  }
+
+  /** Count one trip to Stremio against the account's budget, or refuse. */
+  spendStremio() {
+    const now = this.now();
+    this.stremioTimes = this.stremioTimes.filter((t) => t > now - STREMIO_WINDOW_MS);
+    if (this.stremioTimes.length >= STREMIO_BUDGET) {
+      throw new UserError('SLOW_DOWN', "That's a lot of trips to Stremio in a short time. Wait a few minutes and try again.");
+    }
+    this.stremioTimes.push(now);
   }
 
   /** Count `n` add-on fetches against the account's budget, or refuse. */
@@ -1023,7 +1040,7 @@ export class ProfilesService {
       const row = j.kind === 'switch' ? this.repo.getProfileRow(j.to_profile_id) : this.repo.getBackupRow(j.target_backup_id);
       if (!row) throw new UserError('TARGET_GONE', "The interrupted switch's target no longer exists. Use \"Go back\" instead.");
       const label = j.kind === 'switch' ? row.name : 'The backup';
-      const { authKey } = await this.session();
+      const { authKey } = await this.session({ spend: false });
       this.assertAnchor(row, account, label);
       const target = decodeSnapshot(this.repo.cipher, row, label);
       const live = await this.readLive(authKey);
@@ -1048,7 +1065,7 @@ export class ProfilesService {
       if (!j) throw new UserError('NOTHING_OPEN', 'There is no unfinished switch.');
       const row = j.rollback_backup_id != null ? this.repo.getBackupRow(j.rollback_backup_id) : null;
       if (!row) throw new UserError('BACKUP_GONE', 'The backup taken before the switch is missing. Use "Finish" instead.');
-      const { authKey } = await this.session();
+      const { authKey } = await this.session({ spend: false });
       this.assertAnchor(row, account, 'The pre-switch backup');
       const snapshot = decodeSnapshot(this.repo.cipher, row, 'The pre-switch backup');
       const live = await this.readLive(authKey);
@@ -1090,7 +1107,7 @@ export class ProfilesService {
       if (this.repo.getOpenJournal()) return { done: false, reason: 'unfinished switch' };
       let authKey;
       try {
-        ({ authKey } = await this.session());
+        ({ authKey } = await this.session({ spend: false }));
       } catch (err) {
         if (err.kind === 'auth' || err.code === 'ACCOUNT_CHANGED') return { done: false, reason: 'signed out of Stremio' };
         throw err;
@@ -1433,9 +1450,13 @@ export class ProfilesService {
     }
   }
 
-  /** Validate the stored key against Stremio and make sure it's still the linked account. */
-  async session() {
+  /**
+   * Validate the stored key against Stremio and make sure it's still the linked
+   * account. Counts against the account's Stremio budget unless `spend` is false.
+   */
+  async session({ spend = true } = {}) {
     const account = this.requireAccount();
+    if (spend) this.spendStremio();
     const authKey = this.repo.getAuthKey();
     const user = await this.stremio.getUser(authKey);
     if (user.id !== account.stremio_user_id) {

@@ -10,7 +10,7 @@ import { migrate } from '../src/db.js';
 import { openExport } from '../src/core/exporter.js';
 import { WrongKeyError, checkSecretKey } from '../src/core/keycheck.js';
 import { runDaily, snapshotDatabase } from '../src/core/scheduler.js';
-import { MAX_PROFILES } from '../src/core/service.js';
+import { MAX_PROFILES, STREMIO_BUDGET } from '../src/core/service.js';
 import { libItem } from './helpers/fakeStremio.js';
 import { linkedWithKids } from './helpers/setup.js';
 
@@ -213,5 +213,22 @@ describe('activity log', () => {
     const [latest] = repo.listActivity();
     assert.match(latest.detail, /Switched from "Original" to "Kids"/);
     assert.ok(repo.listActivity().some((a) => /Created "Kids"/.test(a.detail)));
+  });
+});
+
+describe('trips to Stremio', () => {
+  it('an account looping Stremio-reading pages is slowed down; the daily backup still runs', async () => {
+    const { service, accounts, db, original, advance } = await linkedWithKids();
+    service.stremioTimes = [];
+    for (let i = 0; i < STREMIO_BUDGET; i++) await service.editableAddons(original.id);
+    await assert.rejects(service.editableAddons(original.id), (e) => e.code === 'SLOW_DOWN');
+    await assert.rejects(service.saveNow(), (e) => e.code === 'SLOW_DOWN');
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-budget-'));
+    const summary = await runDaily({ db, dataDir: dir, accounts, pause: async () => {} });
+    assert.equal(summary.failed, 0);
+
+    advance(11 * 60 * 1000);
+    await service.editableAddons(original.id);
   });
 });
