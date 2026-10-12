@@ -9,6 +9,23 @@ export const CATALOG_TYPE = 'OpenProfiles';
 export const CATALOG_ID = 'openprofiles';
 export const ID_PREFIX = 'openprofiles:';
 
+/**
+ * The row's catalog id names the profile whose add-on list it's in:
+ * "openprofiles.3". Stremio keeps a Home row it already loaded while the
+ * request for it (add-on link, type, catalog id) stays the same, even when the
+ * add-ons change (stremio-core catalogs_with_extra.rs), so with one fixed id
+ * the checkmark stayed on the old profile until Home was closed. A different
+ * id per profile makes every switch load the row again.
+ */
+export function catalogId(profileId) {
+  return profileId == null ? CATALOG_ID : `${CATALOG_ID}.${profileId}`;
+}
+
+/** Any id the row has had: the plain one (installed before ids named profiles) or a profile's. */
+export function isCatalogId(id) {
+  return id === CATALOG_ID || id.startsWith(`${CATALOG_ID}.`);
+}
+
 /** How the add-on presents itself; the Server tab can change all of it (Settings.addon()). */
 export const DEFAULT_PRESENTATION = {
   name: DEFAULT_NAME, description: DEFAULT_ADDON_DESCRIPTION, catalogName: DEFAULT_CATALOG_NAME, logoVersion: null,
@@ -17,9 +34,9 @@ export const DEFAULT_PRESENTATION = {
 /**
  * The catalog type stays "OpenProfiles" whatever the add-on is called: Stremio
  * keeps it with installed copies and in its library, so changing it would
- * break the row until the next switch.
+ * break the row until the next switch. `profileId` is the profile in use (see catalogId).
  */
-export function buildManifest({ publicUrl }, presentation = DEFAULT_PRESENTATION) {
+export function buildManifest({ publicUrl }, presentation = DEFAULT_PRESENTATION, profileId = null) {
   const p = { ...DEFAULT_PRESENTATION, ...presentation };
   return {
     id: ADDON_ID,
@@ -28,7 +45,7 @@ export function buildManifest({ publicUrl }, presentation = DEFAULT_PRESENTATION
     description: p.description,
     logo: `${publicUrl}/logo.png${p.logoVersion ? `?v=${p.logoVersion}` : ''}`,
     types: [CATALOG_TYPE],
-    catalogs: [{ type: CATALOG_TYPE, id: CATALOG_ID, name: p.catalogName }],
+    catalogs: [{ type: CATALOG_TYPE, id: catalogId(profileId), name: p.catalogName }],
     // One meta resource only: stremio-core matches the first one, and without
     // it Stremio says "No addons were requested for this meta" and never asks
     // for streams.
@@ -44,17 +61,18 @@ export function buildManifest({ publicUrl }, presentation = DEFAULT_PRESENTATION
 /**
  * What the switch needs to keep OpenProfiles installed in every profile it
  * writes. `presentation` returns the current name and texts, so a switch
- * also carries the Server tab's latest ones into Stremio.
+ * also carries the Server tab's latest ones into Stremio. `descriptor` takes
+ * the profile whose add-on list it goes into.
  */
 export function createSelfAddon({ publicUrl }, presentation = () => DEFAULT_PRESENTATION) {
   const manifestUrl = (token) => `${publicUrl}/${token}/manifest.json`;
   return {
     id: ADDON_ID,
     manifestUrl,
-    descriptor: (token) => ({
+    descriptor: (token, profileId = null) => ({
       transportUrl: manifestUrl(token),
       transportName: '',
-      manifest: buildManifest({ publicUrl }, presentation()),
+      manifest: buildManifest({ publicUrl }, presentation(), profileId),
       flags: {},
     }),
   };

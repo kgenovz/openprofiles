@@ -5,7 +5,7 @@ import { textOn } from '../web/theme.js';
 import { ArtCache, BRAND_COLOUR, renderBackground, renderLogo, renderPoster } from './art.js';
 import { isPhoto } from './avatars.js';
 import {
-  CATALOG_ID, CATALOG_TYPE, buildManifest, parseProfileMetaId, profileMetaId,
+  CATALOG_TYPE, buildManifest, isCatalogId, parseProfileMetaId, profileMetaId,
 } from './manifest.js';
 
 // Stremio waits on the stream request while the switch runs. Past this, answer
@@ -157,9 +157,9 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
     res.set('Cache-Control', 'public, max-age=86400').type('png').send(png);
   });
 
-  router.get('/:token/manifest.json', cors, withToken((req, res) => {
+  router.get('/:token/manifest.json', cors, withToken((req, res, state) => {
     noStore(res);
-    res.json(buildManifest({ publicUrl }, settings.addon()));
+    res.json(buildManifest({ publicUrl }, settings.addon(), state.active_profile_id));
   }));
 
   // Stremio's "Configure" button opens <transport base>/configure.
@@ -167,7 +167,8 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
 
   const catalog = withToken((req, res, state, service) => {
     noStore(res);
-    if (req.params.type !== CATALOG_TYPE || req.params.id !== CATALOG_ID) return res.json({ metas: [] });
+    // Any of the row's ids gets the current list: a copy saved under another profile's id is fine too.
+    if (req.params.type !== CATALOG_TYPE || !isCatalogId(req.params.id)) return res.json({ metas: [] });
     const metas = service.repo.listProfiles().map((p) => preview(state.addon_token, p, p.id === state.active_profile_id));
     return res.json({ metas });
   });

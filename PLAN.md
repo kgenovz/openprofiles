@@ -126,6 +126,9 @@ compare live item `state.timeOffset` vs the stored one per `_id` and only ever a
 - Catalog: one meta per profile, `id: profiles:<id>`, `posterShape:'square'`, **PNG posters**
   (mobile can't decode SVG), the active profile gets a poster with a baked-in checkmark (mobile
   grids show nothing else). Generate posters at boot with `sharp` (initial on colour).
+  *Built note:* the catalog id names the profile in use (`openprofiles.<id>`). stremio-core keeps a
+  loaded Home row while its request is unchanged, even across an add-on change, and only clears it
+  when Home closes (Library opens on top of it), so a fixed id left the checkmark on the old profile.
 - Meta: minimal (name, poster, background, description), echo the requested type; 404 for
   unknown ids.
 - Stream GET **performs the switch**, then returns one stream

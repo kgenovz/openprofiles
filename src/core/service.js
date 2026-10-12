@@ -132,9 +132,10 @@ export class ProfilesService {
     for (let i = 0; i < n; i++) this.fetchTimes.push(now);
   }
 
-  prepareAddons(addons) {
+  /** `addons` with OpenProfiles in place, as profile `profileId`'s list (its catalog id names the profile). */
+  prepareAddons(addons, profileId) {
     if (!this.selfAddon) return addons;
-    return ensureSelfAddon(addons, this.selfAddon.descriptor(this.repo.getState().addon_token));
+    return ensureSelfAddon(addons, this.selfAddon.descriptor(this.repo.getState().addon_token, profileId));
   }
 
   noteAddons(addons) {
@@ -206,7 +207,7 @@ export class ProfilesService {
       const token = randomToken();
       const addons = await this.stremio.getAddons(authKey);
       if (addons.some(isSelfAddon)) {
-        await this.stremio.setAddons(authKey, ensureSelfAddon(addons, this.selfAddon.descriptor(token)));
+        await this.stremio.setAddons(authKey, ensureSelfAddon(addons, this.selfAddon.descriptor(token, this.repo.getState()?.active_profile_id)));
       }
       this.repo.setAddonToken(token);
       this.noteAddons(addons);
@@ -629,7 +630,7 @@ export class ProfilesService {
 
     const { addons: wanted, activity, warnings = [], noChange = false } = await change(current, profile);
     if (noChange) return { changed: false, warnings: [], active, profile };
-    const next = this.prepareAddons(wanted);
+    const next = this.prepareAddons(wanted, profileId);
     checkAddons(next, profile.name);
     if (JSON.stringify(next) === JSON.stringify(current)) return { changed: false, warnings: [], active, profile };
 
@@ -935,7 +936,7 @@ export class ProfilesService {
     this.log.info('Switch started', { journalId, from: outgoing?.id ?? null, to: profileId });
 
     // 8-10. Write to Stremio.
-    const result = await this.applyOrFail('switch', journalId, authKey, live, targetSnap);
+    const result = await this.applyOrFail('switch', journalId, authKey, live, targetSnap, profileId);
 
     // 11. Flip the pointer.
     this.repo.transaction(() => {
@@ -948,9 +949,9 @@ export class ProfilesService {
     return { alreadyActive: false, profile: this.repo.getProfile(profileId), ...result };
   }
 
-  async applyOrFail(what, journalId, authKey, live, target) {
+  async applyOrFail(what, journalId, authKey, live, target, profileId) {
     try {
-      return await this.applySnapshot(journalId, authKey, live, target);
+      return await this.applySnapshot(journalId, authKey, live, target, profileId);
     } catch (err) {
       this.repo.failJournal(journalId, userMessageOf(err));
       this.log.error(`${what} interrupted`, { journalId, error: err.message });
@@ -966,9 +967,9 @@ export class ProfilesService {
    * the old add-ons would save them into the target at the next switch away.)
    * Notifications are best-effort; when they can't be swapped, the account
    * remembers that Stremio's aren't the active profile's, so they aren't saved
-   * into it later.
+   * into it later. `profileId` is the profile in use once it's done.
    */
-  async applySnapshot(journalId, authKey, live, target) {
+  async applySnapshot(journalId, authKey, live, target, profileId) {
     const warnings = [];
 
     this.repo.setJournalPhase(journalId, 'library');
@@ -977,7 +978,7 @@ export class ProfilesService {
     await this.putChunks(lib.changes, LIBRARY_CHUNK, (c) => this.stremio.putLibrary(authKey, c));
 
     this.repo.setJournalPhase(journalId, 'addons');
-    const addons = this.prepareAddons(target.addons);
+    const addons = this.prepareAddons(target.addons, profileId);
     if (JSON.stringify(addons) !== JSON.stringify(live.addons)) {
       await this.stremio.setAddons(authKey, addons);
       this.noteAddons(addons);
@@ -1026,7 +1027,7 @@ export class ProfilesService {
       this.assertAnchor(row, account, label);
       const target = decodeSnapshot(this.repo.cipher, row, label);
       const live = await this.readLive(authKey);
-      const result = await this.applyOrFail(j.kind, j.id, authKey, live, target);
+      const result = await this.applyOrFail(j.kind, j.id, authKey, live, target, j.to_profile_id);
       this.repo.transaction(() => {
         if (j.kind === 'switch') this.repo.setActiveProfile(j.to_profile_id);
         else this.repo.saveProfileSnapshot(j.to_profile_id, target);
@@ -1051,7 +1052,7 @@ export class ProfilesService {
       this.assertAnchor(row, account, 'The pre-switch backup');
       const snapshot = decodeSnapshot(this.repo.cipher, row, 'The pre-switch backup');
       const live = await this.readLive(authKey);
-      const result = await this.applyOrFail('rollback', j.id, authKey, live, snapshot);
+      const result = await this.applyOrFail('rollback', j.id, authKey, live, snapshot, j.from_profile_id);
       // The pointer never moved and the outgoing profile was saved before any
       // write, so closing the journal is all that's left.
       this.repo.closeJournal(j.id, 'rolled_back', result.warnings);
@@ -1159,7 +1160,7 @@ export class ProfilesService {
         });
         return this.repo.startJournal({ kind: 'restore', fromProfileId: active.id, toProfileId: active.id, targetBackupId: backupId, rollbackBackupId: preId });
       });
-      const result = await this.applyOrFail('restore', journalId, authKey, live, target);
+      const result = await this.applyOrFail('restore', journalId, authKey, live, target, active.id);
       this.repo.transaction(() => {
         this.repo.saveProfileSnapshot(active.id, target);
         this.repo.closeJournal(journalId, 'finished', result.warnings);

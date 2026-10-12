@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { createAddonRouter } from '../src/addon/routes.js';
 import { posterSvg, renderPoster } from '../src/addon/art.js';
 import {
-  ADDON_ID, CATALOG_TYPE, buildManifest, ensureSelfAddon, isSelfAddon, parseProfileMetaId,
+  ADDON_ID, CATALOG_TYPE, buildManifest, ensureSelfAddon, isCatalogId, isSelfAddon, parseProfileMetaId,
 } from '../src/addon/manifest.js';
 import { silentLogger } from '../src/log.js';
 import { createApp } from '../src/web/app.js';
@@ -35,6 +35,13 @@ describe('manifest', () => {
     assert.equal(repointed[0].manifest.v, 2);
   });
 
+  it("the row's catalog id names the profile in use", () => {
+    assert.equal(buildManifest({ publicUrl: PUBLIC_URL }).catalogs[0].id, 'openprofiles');
+    assert.equal(buildManifest({ publicUrl: PUBLIC_URL }, undefined, 7).catalogs[0].id, 'openprofiles.7');
+    for (const id of ['openprofiles', 'openprofiles.7']) assert.ok(isCatalogId(id), id);
+    for (const id of ['top', 'openprofilesx', 'openprofiles:7']) assert.ok(!isCatalogId(id), id);
+  });
+
   it('parses only well-formed profile ids', () => {
     assert.equal(parseProfileMetaId('openprofiles:12'), 12);
     for (const bad of ['openprofiles:', 'openprofiles:x', 'tt123', 'openprofiles:-1', 'openprofiles:1.5']) {
@@ -52,6 +59,15 @@ describe('switching keeps OpenProfiles installed', () => {
     assert.ok(self, 'the switcher row survives the switch');
     assert.equal(self.transportUrl, `${PUBLIC_URL}/${repo.getState().addon_token}/manifest.json`);
     assert.equal(repo.getState().addon_installed, 1);
+  });
+
+  it('every switch gives the row a new catalog id, so Stremio loads it again', async () => {
+    const { service, fake, kids, original } = await linkedWithKids({ withAddon: true });
+    const rowId = () => fake.addons.find(isSelfAddon).manifest.catalogs[0].id;
+    await service.switchTo(kids.id);
+    assert.equal(rowId(), `openprofiles.${kids.id}`);
+    await service.switchTo(original.id);
+    assert.equal(rowId(), `openprofiles.${original.id}`);
   });
 
   it('rotating the link repoints the installed copy before the old token stops working', async () => {
@@ -124,6 +140,7 @@ describe('add-on routes', () => {
     assert.equal(res.headers.get('access-control-allow-origin'), '*');
     assert.equal(res.headers.get('cache-control'), 'no-store');
     assert.equal(body.id, ADDON_ID);
+    assert.equal(body.catalogs[0].id, `openprofiles.${ctx.repo.getState().active_profile_id}`);
   });
 
   it('answers 404 for a wrong token', async () => {
@@ -137,6 +154,10 @@ describe('add-on routes', () => {
     assert.deepEqual(body.metas.map((m) => m.name), ['Original', 'Kids']);
     assert.ok(body.metas.every((m) => m.posterShape === 'square' && /\.png\?v=/.test(m.poster)));
     assert.match(body.metas[0].description, /in use/);
+    for (const id of ['openprofiles.1', 'openprofiles.999']) {
+      const again = await get(`/${token}/catalog/${CATALOG_TYPE}/${id}.json`);
+      assert.deepEqual(again.body, body, 'any of the row ids gets the current list');
+    }
     const other = await get(`/${token}/catalog/movie/top.json`);
     assert.deepEqual(other.body, { metas: [] });
   });
