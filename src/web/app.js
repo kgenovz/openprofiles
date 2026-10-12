@@ -8,7 +8,7 @@ import { isValidAvatar } from '../addon/avatars.js';
 import { AVATAR_COLOURS, BIN_DAYS, DEFAULT_COLOUR, UserError, userMessageOf } from '../core/service.js';
 import { createAuth } from './auth.js';
 import {
-  accountPage, addonManagerPage, backupsPage, errorPage, installPage, managerAddonRow, profilesPage, restorePreviewPage,
+  accountPage, addonManagerPage, backupsPage, errorPage, installPage, managerAddonRow, privacyPage, profilesPage, restorePreviewPage,
   signInPage, wizardAddonRow, wizardPage,
 } from './views.js';
 
@@ -33,6 +33,9 @@ const idParam = (req) => {
 };
 
 /** A form field that may be sent once, many times or not at all. */
+/** A request path fit for the log: add-on links carry the account's secret token as a segment. */
+const logPath = (p) => String(p).replace(/[A-Za-z0-9_-]{20,}/g, '…');
+
 const many = (v) => (v == null ? [] : Array.isArray(v) ? v.map(String) : [String(v)]);
 
 /** Cinemeta switches as posted ("on" when ticked) into cinemeta.js settings. */
@@ -58,6 +61,8 @@ function renamesFromForm(body) {
 export function createApp({ config, db, accounts, log }) {
   const app = express();
   const auth = createAuth({ db, config });
+  // A shared server (anyone, or a list, can sign in) says who runs it and what it keeps.
+  const instance = { shared: Boolean(config.access && config.access.mode !== 'owner'), operator: config.operator ?? null, privacyNote: config.privacyNote ?? null };
   app.set('trust proxy', config.trustProxy);
   app.disable('x-powered-by');
   app.use(securityHeaders);
@@ -85,7 +90,7 @@ export function createApp({ config, db, accounts, log }) {
       if (result?.redirect) to = result.redirect;
       if (result?.text) auth.setFlash(req, { type: 'ok', text: result.text, details: result.details });
     } catch (err) {
-      if (!err.userMessage) log.error('Unexpected error', { path: req.path, error: err.message, stack: err.stack });
+      if (!err.userMessage) log.error('Unexpected error', { path: logPath(req.path), error: err.message, stack: err.stack });
       auth.setFlash(req, { type: 'error', text: userMessageOf(err) });
     }
     res.redirect(303, to);
@@ -96,27 +101,28 @@ export function createApp({ config, db, accounts, log }) {
     try {
       res.set('Cache-Control', 'no-store').json(await fn(req));
     } catch (err) {
-      if (!err.userMessage) log.error('Unexpected error', { path: req.path, error: err.message, stack: err.stack });
+      if (!err.userMessage) log.error('Unexpected error', { path: logPath(req.path), error: err.message, stack: err.stack });
       res.status(400).json({ error: userMessageOf(err) });
     }
   };
 
   app.get('/health', (req, res) => res.json({ ok: true }));
+  app.get('/privacy', (req, res) => sendPage(res, privacyPage({ instance })));
   app.get('/', auth.optional, (req, res) => res.redirect(303, req.session ? '/configure' : '/signin'));
 
   // Sign in with Stremio. The password goes to Stremio once and is never stored.
   app.get('/signin', auth.optional, (req, res) => {
     const again = req.query.again === '1';
     if (req.session && !again) return res.redirect(303, '/configure');
-    return sendPage(res, signInPage({ again }));
+    return sendPage(res, signInPage({ again, instance }));
   });
   app.post('/signin', async (req, res) => {
     const email = String(req.body?.email || '').trim();
     const password = String(req.body?.password || '');
     const limited = auth.checkSignInLimits(req, email);
     if (limited) {
-      log.warn('Sign-in rate-limited', { ip: req.ip });
-      return sendPage(res, signInPage({ error: limited, email }), 429);
+      log.warn('Sign-in rate-limited');
+      return sendPage(res, signInPage({ error: limited, email, instance }), 429);
     }
     try {
       const { accountId, created, warnings } = await accounts.signIn(email, password);
@@ -127,7 +133,7 @@ export function createApp({ config, db, accounts, log }) {
       return res.redirect(303, '/configure');
     } catch (err) {
       if (!err.userMessage) log.error('Sign-in failed', { error: err.message });
-      return sendPage(res, signInPage({ error: userMessageOf(err), email }), err.kind === 'auth' ? 401 : 400);
+      return sendPage(res, signInPage({ error: userMessageOf(err), email, instance }), err.kind === 'auth' ? 401 : 400);
     }
   });
 
@@ -515,7 +521,7 @@ export function createApp({ config, db, accounts, log }) {
     }
     await accounts.deleteAccount(req.session.accountId);
     auth.logout(req, res);
-    return sendPage(res, signInPage({ notice: 'Your OpenProfiles account and everything saved for it were deleted. Your Stremio account is as it was.' }));
+    return sendPage(res, signInPage({ notice: 'Your OpenProfiles account and everything saved for it were deleted. Your Stremio account is as it was.', instance }));
   });
 
   // Picture tiles for the page (banners and the picker). SVG via <img>, so nothing in them runs.
@@ -542,7 +548,7 @@ export function createApp({ config, db, accounts, log }) {
   app.use((req, res) => sendPage(res, errorPage({ status: 404, message: "There's nothing here." }), 404));
   // Four parameters is how Express recognises an error handler.
   app.use((err, req, res, _next) => {
-    log.error('Request failed', { path: req.path, error: err.message, stack: err.stack });
+    log.error('Request failed', { path: logPath(req.path), error: err.message, stack: err.stack });
     const status = err.status && err.status < 500 ? err.status : 500;
     sendPage(res, errorPage({ status, message: status === 500 ? 'The server log has details.' : 'That request was not valid.' }), status);
   });

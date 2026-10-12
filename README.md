@@ -5,7 +5,10 @@ add-ons and new-episode notifications. Switch from a web page, or from a **Switc
 right on Stremio's Home screen.
 
 OpenProfiles is a small server you run yourself (one Docker container). It is not made by or
-affiliated with Stremio.
+affiliated with Stremio. To try it first, there's a free shared server at
+[openprofiles.kgenovz.com](https://openprofiles.kgenovz.com) (limited places); its
+[privacy page](https://openprofiles.kgenovz.com/privacy) says what it keeps. Running your own is
+recommended: it's light, and then your add-on links never leave your hands.
 
 > **Have Stremio Supporter?** Use Stremio's own profiles instead. They work on several devices
 > at the same time; OpenProfiles can't.
@@ -59,6 +62,8 @@ https.
    | `PORT` | no | Port inside the container (default `7000`) |
    | `TRUST_PROXY` | no | Express trust-proxy setting (default trusts local and private networks) |
    | `ALLOW_PRIVATE_ADDONS` | no | `true` lets the add-on manager fetch add-ons on private networks (a home LAN). Off by default |
+   | `OPERATOR` | no | On a shared server (`list` or `open`), who runs it; shown on the sign-in and privacy pages |
+   | `PRIVACY_NOTE` | no | One more line for the privacy page about your setup, e.g. `The web proxy keeps no access logs.` |
 
 2. Put it behind a reverse proxy that handles https. With [Caddy](https://caddyserver.com):
 
@@ -81,6 +86,20 @@ https.
 
 One server can hold several Stremio accounts (`ACCESS=list` or `open`). Each account only ever
 sees and changes its own profiles, backups and Stremio account.
+
+### Where to run it
+
+For a household it needs very little: tens of MB of memory and a few MB of disk per Stremio
+account. The image is built for `amd64` and `arm64`. What it does need:
+
+- an **https** address Stremio can reach from every device, and
+- a **disk that persists** (`/data`), on a machine that stays up: the add-on answers Stremio
+  whenever someone opens a profile.
+
+So a small always-on VM (the free tiers of the big clouds' smallest VMs are enough), a home
+server, NAS or Raspberry Pi, or a VPS you already have all work. At home, a tunnel such as
+Cloudflare Tunnel or Tailscale Funnel gives it an https address without opening ports. Hosting
+that sleeps when idle or wipes its disk on restart doesn't suit it.
 
 ### Back up the data volume
 
@@ -169,6 +188,8 @@ are public domain (CC0): Lorelei, Notionists, Open Peeps, Pixel Art and Thumbs.
 - The settings page uses a session cookie (`HttpOnly`, `SameSite=Strict`), CSRF tokens on every
   form, and a login rate limit.
 - Each Stremio account on a server only ever sees and changes its own profiles and backups.
+- The server log never records emails, IP addresses, add-on links or watch history; add-on
+  tokens in request paths are masked. `/privacy` lists everything that is kept.
 
 ## Development
 

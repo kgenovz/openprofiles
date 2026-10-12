@@ -65,5 +65,9 @@ export function loadConfig(env = process.env) {
     trustProxy: env.TRUST_PROXY ?? 'loopback, uniquelocal',
     // Let the add-on manager fetch add-ons on private networks (a home server's LAN). Off by default.
     allowPrivateAddons: /^(1|true|yes)$/i.test(env.ALLOW_PRIVATE_ADDONS || ''),
+    // Shown to people signing in to a shared server: who runs it, and anything the
+    // operator adds about their setup (e.g. "The web proxy keeps no access logs.").
+    operator: (env.OPERATOR || '').trim().slice(0, 80) || null,
+    privacyNote: (env.PRIVACY_NOTE || '').trim().slice(0, 500) || null,
   };
 }

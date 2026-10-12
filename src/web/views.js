@@ -30,6 +30,8 @@ const BACKUP_GROUPS = [
   { title: 'Setup', keep: 'kept forever', kinds: ['original'] },
 ];
 
+const REPO_URL = 'https://github.com/kgenovz/openprofiles';
+
 const NO_CINEMETA_EFFECT =
   "Stremio's Calendar and new-episode notifications only come from Cinemeta, so they won't work without it.";
 
@@ -162,6 +164,7 @@ export function layout({ title, body, account, csrf, tab = null, wide = false })
     </div>
   </header>
   <main class="${wide ? 'wide' : ''}">${body}</main>
+  <footer class="foot"><a href="/privacy">What this server keeps</a> · <a href="${REPO_URL}" rel="noopener">OpenProfiles on GitHub</a></footer>
 </body>
 </html>`;
 }
@@ -194,7 +197,8 @@ function undoBanner(undo, csrf) {
 }
 
 /** From the "Sign in with Stremio" board of the Phase 2 design. */
-export function signInPage({ error, notice, email = '', again = false } = {}) {
+/** `instance.shared`: anyone (or a list) can sign in here, so say who runs it and what it keeps. */
+export function signInPage({ error, notice, email = '', again = false, instance = {} } = {}) {
   const steps = [
     html`Sign in with Stremio. Your account as it is now becomes your <strong>Original</strong> profile, and a permanent backup of it is kept.`,
     html`Make more profiles: a name and picture, the add-ons each one should have.`,
@@ -219,6 +223,12 @@ export function signInPage({ error, notice, email = '', again = false } = {}) {
           <button type="submit" class="primary">Sign in</button>
         </form>
         <p class="hint">${icon.lock} Your password goes to Stremio once to get a sign-in key, and is never stored. OpenProfiles only changes your own account.</p>
+        ${instance.shared ? html`<div class="shared-note">
+          <p><strong>A shared server${instance.operator ? html`, run by ${instance.operator}` : ''}.</strong>
+            It keeps your profiles, backups and Stremio sign-in key, encrypted. No tracking, and no logs of your email, IP address or add-on links.
+            <a href="/privacy">What it keeps</a></p>
+          <p>Rather keep it to yourself? OpenProfiles is free and very light to run: <a href="${REPO_URL}" rel="noopener">host your own</a>.</p>
+        </div>` : ''}
         <p class="hint fold-top">Have Stremio Supporter? It has built-in profiles that work on several devices at once; use those instead.</p>
       </section>
     </div>`,
@@ -920,6 +930,50 @@ export function accountPage({ csrf, account, flash, sessions = [], activity = []
         <label class="grow">Type DELETE to confirm <input name="confirm" autocomplete="off"></label>
         <button type="submit" class="danger">Delete account</button>
       </form>
+    </section>`,
+  });
+}
+
+/** What the server keeps, in plain words. Every line here must stay true to the code. */
+export function privacyPage({ instance = {} } = {}) {
+  return layout({
+    title: 'What this server keeps',
+    body: html`<section class="card narrow prose">
+      <h1>What this server keeps</h1>
+      <p>OpenProfiles keeps what it needs to switch your profiles, and nothing else.${instance.shared && instance.operator ? ` This server is run by ${instance.operator}.` : ''}</p>
+
+      <h2 class="h3">Kept, encrypted</h2>
+      <ul>
+        <li>Your Stremio sign-in key, so the server can switch profiles for you. Not your password.</li>
+        <li>Each profile's library and watch progress, add-on list and new-episode notifications. Add-on links can contain debrid keys.</li>
+        <li>Backups of those: daily, and before every switch, restore and edit. Old ones are removed on a schedule.</li>
+      </ul>
+
+      <h2 class="h3">Kept as is</h2>
+      <ul>
+        <li>Your Stremio email and account id, and your profiles' names and pictures.</li>
+        <li>Where you're signed in here: the description your browser sends (browser and device type), and when it was last used.</li>
+        <li>A list of what you did here (switches, edits, backups), the last 200 entries.</li>
+      </ul>
+
+      <h2 class="h3">Not kept</h2>
+      <ul>
+        <li>Your Stremio password. It goes to Stremio once, to get the sign-in key.</li>
+        <li>No analytics, ads or tracking. These pages load nothing from other sites.</li>
+        <li>The server log has no emails, IP addresses, add-on links or watch history: only events like "account 3 switched profiles", and errors.</li>
+        ${instance.privacyNote ? html`<li>${instance.privacyNote}</li>` : ''}
+      </ul>
+
+      <h2 class="h3">Who can read it</h2>
+      <p>It's encrypted with this server's key, and whoever runs the server holds that key. Trust them as you would any service that has your add-on links, or run your own.</p>
+
+      <h2 class="h3">Deleting it</h2>
+      <p>Account › Delete my OpenProfiles account removes everything from the live database at once. The server's nightly copies of its database still hold it until they expire, within about 5 weeks. Your Stremio account stays as it is.</p>
+
+      <h2 class="h3">Run your own</h2>
+      <p>OpenProfiles is free and open source. A server is one small Docker container: tens of MB of memory and a few MB of disk per account, so a free cloud tier or a Raspberry Pi is plenty. It needs an https address, because Stremio only installs add-ons over https.
+        <a href="${REPO_URL}" rel="noopener">Set it up from GitHub</a>.</p>
+      <p><a href="/">Back to OpenProfiles</a></p>
     </section>`,
   });
 }

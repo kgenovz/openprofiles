@@ -116,6 +116,30 @@ describe('web pages', () => {
     assert.match(page, /Saved Kids&#39;s Cinemeta/);
   });
 
+  it('a shared server says who runs it and what it keeps; the privacy page is public', async () => {
+    const shared = createApp({
+      config: { publicUrl: 'https://profiles.example.com', trustProxy: false, access: { mode: 'open' }, operator: 'kgenovz', privacyNote: 'The web proxy keeps no access logs.' },
+      db: ctx.db, accounts: ctx.accounts, log: silentLogger,
+    }).listen(0);
+    await new Promise((resolve) => shared.once('listening', resolve));
+    const other = `http://127.0.0.1:${shared.address().port}`;
+    try {
+      const signin = await (await fetch(`${other}/signin`)).text();
+      assert.match(signin, /A shared server, run by kgenovz/);
+      assert.match(signin, /href="\/privacy"/);
+      assert.match(signin, /github\.com\/kgenovz\/openprofiles/);
+      const privacy = await fetch(`${other}/privacy`);
+      assert.equal(privacy.status, 200, 'no sign-in needed');
+      const text = await privacy.text();
+      assert.match(text, /Not your password/);
+      assert.match(text, /The web proxy keeps no access logs/);
+    } finally {
+      shared.close();
+    }
+    // A self-hosted (owner) server doesn't show the shared note.
+    assert.doesNotMatch(await (await fetch(`${base}/signin?again=1`)).text(), /A shared server/);
+  });
+
   it('looks up an add-on by link for the page, behind the CSRF check', async () => {
     ctx.web.manifests.set('https://youtube.example/manifest.json', richAddon('YouTube').manifest);
     const noToken = await fetch(`${base}/addons/lookup`, { method: 'POST', headers: { cookie: b.cookie, 'content-type': 'application/json' }, body: '{}' });
