@@ -386,6 +386,17 @@ concern editable; full control of how the server presents itself.
   fixed log message in memory (`log.problems()`), never their fields. The daily jobs store a
   count summary in `meta.last_daily_summary`.
 
+### Profile photos
+
+*Built 2026-10-12* (migration 8: `profiles.photo_enc`, `profiles.photo_hash`). One uploaded photo
+per profile, on a fourth "Photo" tab of the picture picker (editor only; a new profile gets one
+after it's created). `avatar_preset` `photo:<hash>` shows it, and only the profile's own current
+hash is accepted. app.js shrinks the photo to 1024 px before uploading; `normalisePhoto` redraws
+it as a 512 px JPEG. Encrypted per account (purpose `photo`). Posters draw it full-bleed under
+the name band, backgrounds at half opacity, the web tile embeds it (its CSP allows `img-src
+data:`). Picking another picture keeps the photo for later; "Remove the photo" deletes it.
+Exports carry it; imports redraw it.
+
 ## Open questions for Kyle
 
 - Default access rule for a self-hosted server: `owner` (first sign-in claims it) is the plan.

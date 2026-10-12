@@ -680,3 +680,8 @@ label.button:focus-within { outline: 2px solid var(--accent); outline-offset: 2p
   .settings-nav a { white-space: nowrap; }
   .settings-nav .eyebrow { display: none; }
 }
+
+/* The picture picker's Photo tab */
+.photo-panel { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.photo-panel .pic { flex: none; width: 96px; }
+.photo-panel .pic img { object-fit: cover; }

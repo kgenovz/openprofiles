@@ -7,6 +7,7 @@ import { lorelei, notionists, openPeeps, pixelArt, thumbs } from '@dicebear/coll
  *   'initial'                  the first letter of the name
  *   'char:<id>'                a hand-drawn character below
  *   'gen:<style>:<seed>'       a generated face (DiceBear, CC0 styles only)
+ *   'photo:<hash>'             the profile's uploaded photo (profiles.photo_enc, matched by photo_hash)
  */
 
 const INK = '#14141a';
@@ -134,6 +135,7 @@ export const GENERATED_STYLES = {
 };
 
 const SEED_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const PHOTO_RE = /^[0-9a-f]{16}$/;
 
 export function parseAvatar(preset) {
   if (preset === 'initial') return { kind: 'initial' };
@@ -141,6 +143,7 @@ export function parseAvatar(preset) {
   const [kind, a, b] = parts;
   if (kind === 'char' && parts.length === 2 && Object.hasOwn(CHARACTERS, a)) return { kind: 'char', id: a };
   if (kind === 'gen' && parts.length === 3 && Object.hasOwn(GENERATED_STYLES, a) && SEED_RE.test(b)) return { kind: 'gen', style: a, seed: b };
+  if (kind === 'photo' && parts.length === 2 && PHOTO_RE.test(a)) return { kind: 'photo', hash: a };
   return null;
 }
 
@@ -152,17 +155,21 @@ export function avatarLabel(preset) {
   const p = parseAvatar(preset);
   if (!p || p.kind === 'initial') return 'Letter';
   if (p.kind === 'char') return CHARACTERS[p.id].label;
+  if (p.kind === 'photo') return 'Photo';
   return `${GENERATED_STYLES[p.style].label} face`;
 }
 
+export const isPhoto = (preset) => parseAvatar(preset)?.kind === 'photo';
+
 /**
  * The picture as an <svg> element placed in a box, for nesting inside a
- * larger SVG. Returns null for 'initial' (the caller draws the letter).
+ * larger SVG. Returns null for 'initial' (the caller draws the letter) and for
+ * a photo (art.js draws it from the bytes).
  * `bottom` = the picture is a bust that should sit on the box's bottom edge.
  */
 export function pictureSvg(preset, { x, y, size }) {
   const p = parseAvatar(preset);
-  if (!p || p.kind === 'initial') return null;
+  if (!p || p.kind === 'initial' || p.kind === 'photo') return null;
   if (p.kind === 'char') {
     return `<svg x="${x}" y="${y}" width="${size}" height="${size}" viewBox="0 0 100 100">${CHARACTERS[p.id].svg}</svg>`;
   }

@@ -13,7 +13,7 @@ export const BACKUP_RETENTION = {
 };
 
 const PROFILE_META = `id, name, avatar_preset, avatar_colour, library_count, addon_count, notif_count,
-  snapshot_taken_at, stremio_user_id, created_at`;
+  snapshot_taken_at, stremio_user_id, created_at, photo_hash`;
 const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at, profile_id, edit_kind`;
 const ACTIVITY_KEEP = 200;
 
@@ -156,6 +156,18 @@ export class AccountRepo {
   setProfileAvatar(id, preset, colour) {
     this.db.prepare('UPDATE profiles SET avatar_preset = ?, avatar_colour = ? WHERE id = ? AND account_id = ?')
       .run(preset, colour, id, this.accountId);
+  }
+
+  /** The profile's uploaded photo (JPEG bytes), or null. Works for profiles in the bin too. */
+  getProfilePhoto(id) {
+    const row = this.db.prepare('SELECT photo_enc FROM profiles WHERE id = ? AND account_id = ?').get(id, this.accountId);
+    return row?.photo_enc ? Buffer.from(this.cipher.decryptJson(row.photo_enc, 'photo'), 'base64') : null;
+  }
+
+  /** `jpeg` null removes the photo. The hash is what avatar_preset 'photo:<hash>' points at. */
+  setProfilePhoto(id, jpeg, hash) {
+    this.db.prepare('UPDATE profiles SET photo_enc = ?, photo_hash = ? WHERE id = ? AND account_id = ?')
+      .run(jpeg ? this.cipher.encryptJson(jpeg.toString('base64'), 'photo') : null, jpeg ? hash : null, id, this.accountId);
   }
 
   countProfiles() {

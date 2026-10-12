@@ -19,7 +19,9 @@ import {
 } from './library.js';
 import { Mutex } from './lock.js';
 import { snapshotHash } from './repo.js';
-import { isValidAvatar } from '../addon/avatars.js';
+import crypto from 'node:crypto';
+import { normalisePhoto } from '../addon/art.js';
+import { isPhoto, isValidAvatar } from '../addon/avatars.js';
 import { ADDON_ID, ID_PREFIX, ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
 
 // Each clears 3.5:1 under a white initial (see the poster artboard in the M2 design).
@@ -51,6 +53,10 @@ export const NATIVE_PROFILES_WARNING =
   'inside whichever Stremio profile is open, so native profiles are the better choice for this account.';
 
 /** A refusal or failure with a message meant for the person using the web page. */
+/** The fingerprint a 'photo:<hash>' picture points at. */
+export const photoHash = (jpeg) => crypto.createHash('sha256').update(jpeg).digest('hex').slice(0, 16);
+const photoPreset = (hash) => (hash ? `photo:${hash}` : null);
+
 export class UserError extends Error {
   constructor(code, userMessage, { cause } = {}) {
     super(userMessage, cause ? { cause } : undefined);
@@ -230,7 +236,8 @@ export class ProfilesService {
       const account = this.requireAccount();
       const clean = this.validateName(name);
       this.validateColour(colour);
-      if (!isValidAvatar(picture)) throw new UserError('BAD_INPUT', 'Pick one of the listed pictures.');
+      // A new profile has no photo yet: that's uploaded on its Picture section afterwards.
+      if (!isValidAvatar(picture) || isPhoto(picture)) throw new UserError('BAD_INPUT', 'Pick one of the listed pictures.');
       this.assertNameFree(clean);
       this.assertRoomForProfile();
       this.assertNoOpenJournal();
@@ -794,7 +801,38 @@ export class ProfilesService {
     this.validateColour(colour);
     const preset = picture ?? profile.avatar_preset;
     if (!isValidAvatar(preset)) throw new UserError('BAD_INPUT', 'Pick one of the listed pictures.');
+    // Only this profile's own photo, as it is now.
+    if (isPhoto(preset) && preset !== photoPreset(profile.photo_hash)) {
+      throw new UserError('BAD_INPUT', "That photo isn't this profile's any more. Reload the page and pick again.");
+    }
     this.repo.setProfileAvatar(id, preset, colour);
+  }
+
+  /**
+   * The profile's own photo, already redrawn (art.js normalisePhoto), becomes
+   * its picture. One per profile: a new upload replaces the old one.
+   */
+  setPhoto(id, jpeg) {
+    const profile = this.requireProfile(id);
+    const hash = photoHash(jpeg);
+    this.repo.transaction(() => {
+      this.repo.setProfilePhoto(id, jpeg, hash);
+      this.repo.setProfileAvatar(id, photoPreset(hash), profile.avatar_colour);
+    });
+    this.repo.logActivity('profile', `New photo for "${profile.name}"`);
+    return this.repo.getProfile(id);
+  }
+
+  /** Deletes the photo; a profile showing it goes back to its letter. */
+  removePhoto(id) {
+    const profile = this.requireProfile(id);
+    if (!profile.photo_hash) return profile;
+    this.repo.transaction(() => {
+      this.repo.setProfilePhoto(id, null);
+      if (isPhoto(profile.avatar_preset)) this.repo.setProfileAvatar(id, 'initial', profile.avatar_colour);
+    });
+    this.repo.logActivity('profile', `Removed the photo of "${profile.name}"`);
+    return this.repo.getProfile(id);
   }
 
   deleteProfile(id) {
@@ -1165,11 +1203,20 @@ export class ProfilesService {
         throw err;
       }
     };
+    const exportPhoto = (profileId) => {
+      try {
+        const photo = this.repo.getProfilePhoto(profileId);
+        return photo ? { photo: photo.toString('base64') } : {};
+      } catch (err) {
+        if (err instanceof DecryptError) return {};
+        throw err;
+      }
+    };
     const profiles = this.repo.listProfiles().map((p) => {
       const snap = decode(this.repo.getProfileRow(p.id));
       return {
         name: p.name, avatar_preset: p.avatar_preset, avatar_colour: p.avatar_colour, active: p.id === activeId,
-        created_at: p.created_at, snapshot_taken_at: p.snapshot_taken_at,
+        created_at: p.created_at, snapshot_taken_at: p.snapshot_taken_at, ...exportPhoto(p.id),
         ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
       };
     });
@@ -1177,7 +1224,7 @@ export class ProfilesService {
     const bin = this.repo.listBin().map((p) => {
       const snap = decode(this.repo.getBinProfileRow(p.id));
       return {
-        name: p.name, avatar_preset: p.avatar_preset, avatar_colour: p.avatar_colour, deleted_at: p.deleted_at,
+        name: p.name, avatar_preset: p.avatar_preset, avatar_colour: p.avatar_colour, deleted_at: p.deleted_at, ...exportPhoto(p.id),
         ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
       };
     });
@@ -1225,6 +1272,10 @@ export class ProfilesService {
         throw new UserError('TOO_MANY', `This export has ${profiles.length} profiles, and there's room for ${room} more. Delete some first.`);
       }
       const prepared = profiles.map((p, i) => ({ p, snap: check(p, `Profile ${i + 1} in the file`) }));
+      // Photos are drawn again like an upload; one that can't be read is left out.
+      for (const x of prepared) {
+        x.photo = typeof x.p.photo === 'string' ? await normalisePhoto(Buffer.from(x.p.photo, 'base64')) : null;
+      }
       const preparedBackups = backups.map((b, i) => ({ b, snap: check(b, `Backup ${i + 1} in the file`) }));
       const kindNames = { original: 'Setup', auto: 'Daily', pre_switch: 'Before a switch', pre_restore: 'Before a restore', pre_change: 'Before an edit', manual: 'Manual', imported: 'Imported' };
       const newest = preparedBackups
@@ -1233,14 +1284,17 @@ export class ProfilesService {
         .slice(0, IMPORT_MAX_BACKUPS);
       let addedProfiles = 0;
       this.repo.transaction(() => {
-        for (const { p, snap } of prepared) {
+        for (const { p, snap, photo } of prepared) {
           const base = this.validateName(p.name);
           let name = base;
           if (this.nameTaken(name)) name = `${base.slice(0, MAX_NAME_LENGTH - 11)} (imported)`;
           for (let n = 2; this.nameTaken(name); n++) name = `${base.slice(0, MAX_NAME_LENGTH - 14)} (imported ${n})`;
-          const preset = isValidAvatar(p.avatar_preset) ? p.avatar_preset : 'initial';
+          let preset = isValidAvatar(p.avatar_preset) ? p.avatar_preset : 'initial';
           const colour = AVATAR_COLOURS.includes(p.avatar_colour) ? p.avatar_colour : DEFAULT_COLOUR;
-          this.repo.insertProfile({ name, avatarPreset: preset, avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot: snap });
+          if (isPhoto(preset) && !photo) preset = 'initial';
+          if (photo && isPhoto(preset)) preset = photoPreset(photoHash(photo));
+          const pid = this.repo.insertProfile({ name, avatarPreset: preset, avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot: snap });
+          if (photo) this.repo.setProfilePhoto(pid, photo, photoHash(photo));
           addedProfiles++;
         }
         for (const { b, snap, at } of newest) {

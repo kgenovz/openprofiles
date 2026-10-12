@@ -253,6 +253,13 @@ const MIGRATIONS = [
   );
   INSERT INTO meta (key, value) SELECT 'owner_account_id', CAST(MIN(id) AS TEXT) FROM accounts HAVING COUNT(*) > 0;
   `,
+  // Uploaded profile photos (2026-10-12), one per profile.
+  //   profiles.photo_enc   the photo as a 512 px JPEG, encrypted like the rest of the profile
+  //   profiles.photo_hash  its fingerprint; avatar_preset 'photo:<hash>' shows it
+  `
+  ALTER TABLE profiles ADD COLUMN photo_enc BLOB;
+  ALTER TABLE profiles ADD COLUMN photo_hash TEXT;
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

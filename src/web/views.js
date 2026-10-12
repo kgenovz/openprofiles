@@ -97,32 +97,52 @@ function previewSrc(avatar, p) {
 }
 
 /**
- * Picture choices in three tabs (Letter / Characters / Faces). Without
- * JavaScript all three groups simply show; app.js turns them into tabs and
- * wires Shuffle and the live colour preview.
+ * Picture choices in tabs (Letter / Characters / Faces, and Photo for a
+ * profile that exists). Without JavaScript the groups simply show; app.js
+ * turns them into tabs and wires Shuffle, the live colour preview and the
+ * photo upload.
  */
-function picturePicker(p) {
+function picturePicker(p, { photo = false, csrf = null } = {}) {
   const current = parseAvatar(p.avatar_preset) ?? { kind: 'initial' };
-  const option = (value, label) => html`<label class="pic">
+  const option = (value, label, src = null) => html`<label class="pic">
     <input type="radio" name="picture" value="${value}" ${value === p.avatar_preset ? 'checked' : ''}>
-    <img src="${previewSrc(value, p)}" alt="" width="64" height="64" data-avatar="${value}" loading="lazy">
+    ${src
+      ? html`<img src="${src}" alt="" width="64" height="64" loading="lazy">`
+      : html`<img src="${previewSrc(value, p)}" alt="" width="64" height="64" data-avatar="${value}" loading="lazy">`}
     <span class="sr-only">${label}</span>
   </label>`;
   const generated = Object.entries(GENERATED_STYLES).flatMap(([id, s]) => [1, 2].map(() => ({ value: `gen:${id}:${randomSeed()}`, label: `${s.label} face` })));
   if (current.kind === 'gen') generated.unshift({ value: p.avatar_preset, label: avatarLabel(p.avatar_preset) });
-  const tab = current.kind === 'gen' ? 'gen' : current.kind === 'char' ? 'char' : 'letter';
+  const tab = { gen: 'gen', char: 'char', photo: photo ? 'photo' : 'letter' }[current.kind] ?? 'letter';
   return html`<fieldset class="picker" data-tab="${tab}">
     <legend>Picture</legend>
     <div class="picker-tabs" role="tablist" hidden>
       <button type="button" role="tab" data-tab-for="letter">Letter</button>
       <button type="button" role="tab" data-tab-for="char">Characters</button>
       <button type="button" role="tab" data-tab-for="gen">Faces</button>
+      ${photo ? html`<button type="button" role="tab" data-tab-for="photo">Photo</button>` : ''}
     </div>
     <div class="pic-grid" data-tab-panel="letter">${option('initial', 'Letter')}</div>
     <div class="pic-grid" data-tab-panel="char">${Object.entries(CHARACTERS).map(([id, c]) => option(`char:${id}`, c.label))}</div>
     <div class="pic-grid" data-tab-panel="gen">${generated.map((g) => option(g.value, g.label))}</div>
+    ${photo ? photoPanel(p, csrf, option) : ''}
     <button type="button" class="shuffle" data-shuffle hidden>Shuffle faces</button>
   </fieldset>`;
+}
+
+/** The Photo tab: this profile's one uploaded photo, and uploading or removing it. */
+function photoPanel(p, csrf, option) {
+  const has = Boolean(p.photo_hash);
+  return html`<div class="pic-grid photo-panel" data-tab-panel="photo">
+    ${has ? option(`photo:${p.photo_hash}`, 'Photo', `/avatars/profile/${p.id}/photo.jpg?v=${p.photo_hash}`) : ''}
+    <div class="stack-sm">
+      <label class="button" data-photo-upload hidden>${has ? 'Upload another photo' : 'Upload a photo'}
+        <input type="file" accept="image/png,image/jpeg,image/webp" class="sr-only" data-photo-file data-url="/profiles/${p.id}/photo" data-csrf="${csrf}"></label>
+      ${has ? html`<button type="submit" class="link small" formaction="/profiles/${p.id}/photo/remove" formnovalidate>Remove the photo</button>` : ''}
+      <span class="hint" role="status" data-photo-status>${has ? '' : 'One photo per profile. It fills the whole tile in Stremio.'}</span>
+      <noscript><span class="hint">Uploading needs JavaScript turned on.</span></noscript>
+    </div>
+  </div>`;
 }
 
 const icon = {
@@ -350,7 +370,7 @@ function profileEditor(d, { csrf, locked }) {
         <h2>Picture</h2>
         <form method="post" action="/profiles/${p.id}/avatar" class="stack" data-picture-form>
           ${csrfField(csrf)}
-          ${picturePicker(p)}
+          ${picturePicker(p, { photo: true, csrf })}
           ${colourPicker('colour', p.avatar_colour)}
           <button type="submit" class="self-start">Save picture</button>
         </form>
@@ -1289,11 +1309,12 @@ export function privacyPage({ site = DEFAULT_SITE } = {}) {
         <li>Your Stremio sign-in key, so the server can switch profiles for you. Not your password.</li>
         <li>Each profile's library and watch progress, add-on list and new-episode notifications. Add-on links can contain debrid keys.</li>
         <li>Backups of those: daily, and before every switch, restore and edit. Old ones are removed on a schedule.</li>
+        <li>Profile photos you upload, redrawn as a small square picture (nothing else from the file is kept).</li>
       </ul>
 
       <h2 class="h3">Kept as is</h2>
       <ul>
-        <li>Your Stremio email and account id, and your profiles' names and pictures.</li>
+        <li>Your Stremio email and account id, and your profiles' names, colours and which picture each shows.</li>
         <li>Where you're signed in here: the description your browser sends (browser and device type), and when it was last used.</li>
         <li>A list of what you did here (switches, edits, backups), the last 200 entries.</li>
       </ul>

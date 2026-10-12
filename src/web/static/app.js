@@ -712,3 +712,40 @@ if (rowName) {
     document.querySelector('[data-row-name-out]').textContent = rowName.value.trim() || 'Switch profile';
   });
 }
+
+// Profile photo: shrink it in the browser (phone photos are big), then upload it on its own.
+const PHOTO_EDGE = 1024;
+for (const box of document.querySelectorAll('[data-photo-upload]')) box.hidden = false;
+document.addEventListener('change', async (event) => {
+  const input = event.target.closest('[data-photo-file]');
+  if (!input) return;
+  const picked = input.files[0];
+  const status = input.closest('.photo-panel').querySelector('[data-photo-status]');
+  if (!picked) return;
+  status.textContent = 'Uploading…';
+  try {
+    let body = picked;
+    try {
+      const bitmap = await createImageBitmap(picked);
+      const scale = Math.min(1, PHOTO_EDGE / Math.min(bitmap.width, bitmap.height));
+      const canvas = Object.assign(document.createElement('canvas'), {
+        width: Math.round(bitmap.width * scale), height: Math.round(bitmap.height * scale),
+      });
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      body = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9)) ?? picked;
+    } catch {
+      // The browser couldn't read it; the server says so if it can't either.
+    }
+    const res = await fetch(input.dataset.url, {
+      method: 'POST',
+      headers: { 'x-csrf-token': input.dataset.csrf, 'content-type': body.type || 'application/octet-stream' },
+      body,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "That photo couldn't be uploaded.");
+    location.hash = 'picture';
+    location.reload();
+  } catch (err) {
+    status.textContent = err.message;
+  }
+});

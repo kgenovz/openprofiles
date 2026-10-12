@@ -210,6 +210,11 @@ Each profile has a colour and a picture: its first letter, one of eleven hand-dr
 or a generated face. Generated faces come from [DiceBear](https://www.dicebear.com) styles that
 are public domain (CC0): Lorelei, Notionists, Open Peeps, Pixel Art and Thumbs.
 
+A profile can also have one photo of its own: **Edit › Picture › Photo › Upload a photo**. The
+browser shrinks it first, and the server redraws it as a 512 px square JPEG (PNG, JPG and WebP
+are read; nothing else from the file is kept). It's stored encrypted with the profile, fills
+the profile's tile in Stremio, and goes into "Download everything".
+
 ## Security notes
 
 - The add-on link contains a secret token, because opening a profile in Stremio switches the

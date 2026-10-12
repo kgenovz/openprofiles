@@ -4,8 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAddonRouter } from '../addon/routes.js';
-import { LOGO_UPLOAD_MAX, avatarTileSvg, normaliseLogo } from '../addon/art.js';
-import { isValidAvatar } from '../addon/avatars.js';
+import { LOGO_UPLOAD_MAX, PHOTO_UPLOAD_MAX, avatarTileSvg, normaliseLogo, normalisePhoto } from '../addon/art.js';
+import { isPhoto, isValidAvatar } from '../addon/avatars.js';
 import { AVATAR_COLOURS, BIN_DAYS, DEFAULT_COLOUR, UserError, userMessageOf } from '../core/service.js';
 import { SECTIONS, Settings } from '../core/settings.js';
 import { serverStats } from '../core/stats.js';
@@ -311,6 +311,23 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     return { text: 'Picture saved.' };
   }, (req) => `/profiles/${idParam(req)}#picture`));
 
+  // A photo for the profile's picture. The page script shrinks it and uploads the bytes;
+  // they're decoded and drawn again before anything is kept.
+  r.post('/profiles/:id/photo', oneUpload, express.raw({ type: () => true, limit: PHOTO_UPLOAD_MAX }), json(async (req) => {
+    const id = idParam(req);
+    req.service.requireProfile(id);
+    const jpeg = await normalisePhoto(req.body);
+    if (!jpeg) throw new UserError('PHOTO', "That picture couldn't be read. Use a PNG, JPG or WebP photo.");
+    const p = req.service.setPhoto(id, jpeg);
+    auth.setFlash(req, { type: 'ok', text: `New photo for ${p.name}. Stremio shows it from the next time it loads the row.` });
+    return { ok: true };
+  }));
+
+  r.post('/profiles/:id/photo/remove', action(async (req) => {
+    const p = req.service.removePhoto(idParam(req));
+    return { text: `Removed ${p.name}'s photo.` };
+  }, (req) => `/profiles/${idParam(req)}#picture`));
+
   r.post('/profiles/:id/delete', action(async (req) => {
     await req.service.deleteProfile(idParam(req));
     return { text: `Profile deleted. It's in the bin on the Backups tab for ${BIN_DAYS} days.`, redirect: '/configure' };
@@ -582,14 +599,34 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
   // Picture tiles for the page (banners and the picker). SVG via <img>, so nothing in them runs.
   const sendSvg = (res, svg) => res
     .set('Cache-Control', 'private, max-age=86400')
-    .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
+    .set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
     .type('image/svg+xml')
     .send(svg);
 
   r.get('/avatars/profile/:id.svg', (req, res) => {
     const p = req.service.repo.getProfile(idParam(req));
     if (!p) return res.status(404).end();
-    return sendSvg(res, avatarTileSvg({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset }));
+    let photo = null;
+    if (isPhoto(p.avatar_preset)) {
+      try {
+        photo = req.service.repo.getProfilePhoto(p.id);
+      } catch {
+        // unreadable: the letter instead
+      }
+    }
+    return sendSvg(res, avatarTileSvg({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, photo }));
+  });
+
+  // The photo on its own, for the picture picker. The hash in the link changes with the photo.
+  r.get('/avatars/profile/:id/photo.jpg', (req, res) => {
+    let photo = null;
+    try {
+      if (req.service.repo.getProfile(idParam(req))) photo = req.service.repo.getProfilePhoto(idParam(req));
+    } catch {
+      // unreadable
+    }
+    if (!photo) return res.status(404).end();
+    return res.set('Cache-Control', 'private, max-age=86400').type('jpeg').send(photo);
   });
 
   r.get('/avatars/preview.svg', (req, res) => {

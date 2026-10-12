@@ -3,6 +3,7 @@ import express from 'express';
 import { userMessageOf } from '../core/service.js';
 import { textOn } from '../web/theme.js';
 import { ArtCache, BRAND_COLOUR, renderBackground, renderLogo, renderPoster } from './art.js';
+import { isPhoto } from './avatars.js';
 import {
   CATALOG_ID, CATALOG_TYPE, buildManifest, parseProfileMetaId, profileMetaId,
 } from './manifest.js';
@@ -38,6 +39,16 @@ function handoffPage(target, colour = BRAND_COLOUR) {
 
 // Only these targets, so /refresh/go can't be pointed anywhere else.
 const REDIRECT_TARGETS = { home: 'stremio:///', library: 'stremio:///library' };
+
+/** The profile's uploaded photo when its picture is the photo, else null. */
+function photoOf(service, p) {
+  if (!isPhoto(p.avatar_preset)) return null;
+  try {
+    return service.repo.getProfilePhoto(p.id);
+  } catch {
+    return null; // unreadable: the letter is drawn instead
+  }
+}
 
 function artVersion(...parts) {
   return crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 10);
@@ -216,8 +227,9 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
     const p = service.repo.getProfile(Number(req.params.id));
     if (!p) return res.status(404).end();
     const active = p.id === state.active_profile_id;
+    // A photo preset names its photo's hash, so the cache key changes with the photo.
     const png = await art.get(`poster|${p.name}|${p.avatar_colour}|${p.avatar_preset}|${active}`,
-      () => renderPoster({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, active }));
+      () => renderPoster({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, active, photo: photoOf(service, p) }));
     res.set('Cache-Control', 'private, max-age=86400').type('png').send(png);
   }));
 
@@ -225,7 +237,7 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
     const p = service.repo.getProfile(Number(req.params.id));
     if (!p) return res.status(404).end();
     const png = await art.get(`bg|${p.name}|${p.avatar_colour}|${p.avatar_preset}`,
-      () => renderBackground({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset }));
+      () => renderBackground({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, photo: photoOf(service, p) }));
     res.set('Cache-Control', 'private, max-age=86400').type('png').send(png);
   }));
 

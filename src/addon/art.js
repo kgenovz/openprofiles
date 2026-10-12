@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import opentype from 'opentype.js';
 import sharp from 'sharp';
-import { isBust, pictureSvg } from './avatars.js';
+import { isBust, isPhoto, pictureSvg } from './avatars.js';
 
 /**
  * Poster and background artwork, drawn as SVG paths from bundled
@@ -130,15 +130,23 @@ function faceSvg({ name, avatar }, W, areaH) {
   return letterSvg(name, W / 2, areaH / 2 + W * 0.03, W * 0.52);
 }
 
+/** An uploaded photo (JPEG bytes) filling a box, cropped to cover it. */
+const photoSvg = (photo, w, h) => `<image href="data:image/jpeg;base64,${photo.toString('base64')}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice"/>`;
+
+/** `photo` is the profile's uploaded photo; it's only drawn when `avatar` is a 'photo:' preset. */
+const usePhoto = (avatar, photo) => Boolean(photo && isPhoto(avatar));
+
 /** Square picture tile (no name band) for the web page and the picture picker. */
-export function avatarTileSvg({ name, colour, avatar, size = 256 }) {
-  return svgDoc(size, size, `<rect width="${size}" height="${size}" fill="${colour}"/>${faceSvg({ name, avatar }, size, size)}`);
+export function avatarTileSvg({ name, colour, avatar, size = 256, photo = null }) {
+  const face = usePhoto(avatar, photo) ? photoSvg(photo, size, size) : faceSvg({ name, avatar }, size, size);
+  return svgDoc(size, size, `<rect width="${size}" height="${size}" fill="${colour}"/>${face}`);
 }
 
-export function posterSvg({ name, colour, active, avatar = 'initial' }) {
+export function posterSvg({ name, colour, active, avatar = 'initial', photo = null }) {
   const W = POSTER_SIZE;
   const bandH = Math.round(W * 0.22);
-  const glyph = faceSvg({ name, avatar }, W, W - bandH);
+  // A photo fills the whole tile, under the name band.
+  const glyph = usePhoto(avatar, photo) ? photoSvg(photo, W, W) : faceSvg({ name, avatar }, W, W - bandH);
   const label = drawable(String(name).trim(), 700);
   const fitted = fitLine(label, 700, W * 0.085, W * 0.88);
   const ring = active ? Math.round(W * 0.027) : 0;
@@ -152,13 +160,14 @@ export function posterSvg({ name, colour, active, avatar = 'initial' }) {
   ].join(''));
 }
 
-export function backgroundSvg({ name, colour, avatar = 'initial' }) {
+export function backgroundSvg({ name, colour, avatar = 'initial', photo = null }) {
   const W = 1280;
   const H = 720;
   const initial = initialOf(name);
   const size = Math.round(H * 0.9);
   const picture = pictureSvg(avatar, { x: Math.round(W * 0.78 - size / 2), y: H - size, size });
-  const faint = picture
+  const faint = usePhoto(avatar, photo) ? `<g opacity="0.5">${photoSvg(photo, W, H)}</g>`
+    : picture
     ? `<g opacity="0.22">${picture}</g>`
     : initial ? `<path d="${centredLine(initial, 800, H * 1.1, W * 0.78, H * 0.5)}" fill="#ffffff" fill-opacity="0.12"/>` : '';
   return svgDoc(W, H, [
@@ -193,8 +202,24 @@ export const LOGO_UPLOAD_MAX = 2 * 1024 * 1024;
  * 256 px square PNG, so nothing of the original file (metadata, scripts in an
  * SVG, a polyglot) survives. Only PNG, JPEG and WebP are read.
  */
-export async function normaliseLogo(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > LOGO_UPLOAD_MAX) return null;
+export function normaliseLogo(buffer) {
+  return redraw(buffer, LOGO_UPLOAD_MAX, (img) => img.resize(256, 256, { fit: 'cover' }).png({ compressionLevel: 9 }));
+}
+
+export const PHOTO_UPLOAD_MAX = 4 * 1024 * 1024;
+
+/**
+ * A profile photo, the same way: a fresh 512 px square JPEG (the poster's
+ * size), cropped to the middle. The page script shrinks big phone photos
+ * before uploading them.
+ */
+export function normalisePhoto(buffer) {
+  return redraw(buffer, PHOTO_UPLOAD_MAX, (img) => img.resize(POSTER_SIZE, POSTER_SIZE, { fit: 'cover' }).jpeg({ quality: 85, mozjpeg: true }));
+}
+
+/** Decode a PNG, JPEG or WebP (nothing else) and draw it again; null when it can't be read. */
+async function redraw(buffer, maxBytes, finish) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > maxBytes) return null;
   let meta;
   try {
     meta = await sharp(buffer, { limitInputPixels: 40_000_000 }).metadata();
@@ -202,11 +227,11 @@ export async function normaliseLogo(buffer) {
     return null;
   }
   if (!['png', 'jpeg', 'webp'].includes(meta.format)) return null;
-  return sharp(buffer, { limitInputPixels: 40_000_000, pages: 1 })
-    .rotate()
-    .resize(256, 256, { fit: 'cover' })
-    .png({ compressionLevel: 9 })
-    .toBuffer();
+  try {
+    return await finish(sharp(buffer, { limitInputPixels: 40_000_000, pages: 1 }).rotate()).toBuffer();
+  } catch {
+    return null;
+  }
 }
 export const renderPoster = (opts) => png(posterSvg(opts));
 export const renderBackground = (opts) => png(backgroundSvg(opts));
