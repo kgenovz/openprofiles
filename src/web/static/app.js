@@ -358,6 +358,9 @@ if (cinemetaForm) {
     // With a wrapped Cinemeta in the list, any row turned on here shows twice.
     const wrapper = cinemetaForm.querySelector('[data-wrapper-warning]');
     if (wrapper) wrapper.hidden = !['popular', 'new', 'featured'].some((k) => cinemetaForm.querySelector(`[data-cm="${k}"]`)?.checked);
+    // The Calendar note matters once something is switched off.
+    const calendar = cinemetaForm.querySelector('[data-cm-calendar]');
+    if (calendar) calendar.hidden = [...cinemetaForm.querySelectorAll('[data-cm]')].every((i) => i.checked);
   });
 }
 
@@ -366,7 +369,14 @@ const metadataForm = document.querySelector('[data-metadata-form]');
 if (metadataForm) {
   const select = metadataForm.querySelector('select[name="source"]');
   const go = metadataForm.querySelector('[data-metadata-go]');
-  const sync = () => { if (select && go) go.disabled = select.value === select.dataset.current; };
+  // The explanations show only for a pick they're about.
+  const sync = () => {
+    if (!select || !go) return;
+    const changing = select.value !== select.dataset.current;
+    go.disabled = !changing;
+    metadataForm.querySelector('[data-meta-pick-hint]').hidden = !changing;
+    metadataForm.querySelector('[data-own-ids-hint]').hidden = !(changing && select.selectedOptions[0]?.hasAttribute('data-own-ids'));
+  };
   metadataForm.addEventListener('change', sync);
   sync();
 }

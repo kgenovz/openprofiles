@@ -321,7 +321,6 @@ function profileEditor(d, { csrf, locked }) {
       <div class="editor-section" id="addons">
         <div class="section-head"><h2>Add-ons</h2><a href="/profiles/${p.id}/addons">Manage add-ons</a></div>
         <p class="hint">${d.addons ? `${plural(addonNames.length, 'add-on')}${addonNames.length ? `: ${addonNames.join(', ')}` : ''}.` : "Its saved add-ons can't be read."}</p>
-        ${d.active ? html`<p class="hint">${p.name} is in use, so changes to its add-ons update Stremio right away (after a backup).</p>` : ''}
       </div>
 
       <div class="editor-section" id="cinemeta">
@@ -393,7 +392,7 @@ const WIZARD_STEPS = ['Name and picture', 'Start from', 'Add-ons', 'Cinemeta', '
 
 /** One add-on in the wizard's list. The checkbox's order in the form is the add-on order. */
 export function wizardAddonRow(a, { checked = false, locked = false } = {}) {
-  const note = a.self ? 'The switcher row. Every profile keeps it.'
+  const note = a.self ? 'The Switch profile row on Home'
     : a.from?.length ? `In ${a.from.join(', ')}` : addonDetail(a);
   return html`<li class="addon-row" data-ref="${a.ref}" data-name="${a.name}"
       data-serves-meta="${a.servesMeta ? '1' : ''}" data-protected="${a.protected || a.self ? '1' : ''}" data-cinemeta="${a.cinemeta ? '1' : ''}"
@@ -517,11 +516,10 @@ export function wizardPage({ csrf, account, options, error = null, values = {} }
       <section class="wizard-step" data-step="4" aria-label="Cinemeta">
         <h2 class="step-title" tabindex="-1">4. Cinemeta</h2>
         <p>Cinemeta is Stremio's built-in catalog add-on. Pick which of its catalogs this profile sees on Home and in Discover.</p>
-        <div class="warn" data-cm-none ${start.cinemeta.present ? 'hidden' : ''}>${icon.alert}<span>This profile won't have Cinemeta, so there's nothing to set here. ${NO_CINEMETA_EFFECT} Tick Cinemeta in the add-ons step to keep them; you can hide all its rows here.</span></div>
+        <div class="warn" data-cm-none ${start.cinemeta.present ? 'hidden' : ''}>${icon.alert}<span>This profile won't have Cinemeta. ${NO_CINEMETA_EFFECT} Tick it in step 3 to keep them.</span></div>
         <div class="switches" data-cm-switches ${start.cinemeta.present ? '' : 'hidden'}>${cinemetaSwitches('cm_', cm)}</div>
         <div class="warn" data-meta-warning hidden>${icon.alert}<span>Details pages are off and none of the ticked add-ons provide them. Titles will open without descriptions or episode lists.</span></div>
         ${wrapperWarning({ name: 'another add-on', profile: 'This profile', hidden: true, action: html`<button type="button" class="link" data-cm-to-wrapper>Turn Cinemeta's own catalogs off and let it show them</button>` })}
-        <p class="hint">You can change these later. Bringing a hidden catalog back fetches Cinemeta again.</p>
       </section>
 
       <section class="wizard-step" data-step="5" aria-label="Review">
@@ -565,7 +563,7 @@ export function managerAddonRow(a, { isNew = false } = {}) {
         ${locked ? html`<span class="badge">${a.self ? 'Always kept' : 'Protected'}</span>` : ''}
         ${isNew ? html`<span class="badge badge-new">New</span>` : ''}
       </span>
-      <span class="hint">${a.self ? 'The switcher row · always kept' : addonDetail(a)}</span>
+      <span class="hint">${a.self ? 'The Switch profile row on Home' : addonDetail(a)}</span>
       ${a.catalogs.length && !a.self ? html`<details class="catalogs">
         <summary>Rename catalogs</summary>
         <div class="stack">
@@ -598,12 +596,12 @@ function metadataCard(p, metadata, { csrf, base }) {
     ${metadata.options.length > 1 || (metadata.options.length === 1 && !metadata.current) ? html`<div class="add-by-link">
       <label class="grow">Get details pages from
         <select name="source" data-current="${metadata.current ?? ''}">
-          ${metadata.options.map((o) => html`<option value="${o.ref}" ${o.ref === metadata.current ? 'selected' : ''}>${o.name}${o.ownIds ? ' (its own ids)' : ''}</option>`)}
+          ${metadata.options.map((o) => html`<option value="${o.ref}" ${o.ref === metadata.current ? 'selected' : ''} ${o.ownIds ? 'data-own-ids' : ''}>${o.name}${o.ownIds ? ' (its own ids)' : ''}</option>`)}
         </select></label>
       <button type="submit" data-metadata-go>Change</button>
     </div>
-    <p class="hint">The add-on you pick moves to the top of the list. Cinemeta's own details pages turn off, unless you pick Cinemeta.</p>
-    ${metadata.options.some((o) => o.ownIds) ? html`<p class="hint">"Its own ids" add-ons (like TMDB set to TMDB ids) give details pages only for titles that use their ids. Pick one if this profile runs on those ids alone, with Cinemeta off; titles with IMDb ids won't get details pages from it.</p>` : ''}` : ''}
+    <p class="hint" data-meta-pick-hint hidden>It moves to the top of the list, and Cinemeta's own details pages turn off (back on if it's Cinemeta).</p>
+    <p class="hint" data-own-ids-hint hidden>It only covers titles with its own ids (e.g. TMDB ids). Pick it if this profile runs on those alone.</p>` : ''}
   </form>`;
 }
 
@@ -626,8 +624,7 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
           <h1 class="h2">${p.name} · Add-ons</h1>
           <button type="button" data-health-check="/profiles/${p.id}/addons/health" hidden>Check they're working</button>
         </div>
-        <p class="hint">Top to bottom is the order Stremio uses for catalogs and streams.
-          ${active ? `${p.name} is in use, so saving also updates Stremio now; a backup is taken first.` : `Saving changes ${p.name}'s saved copy; Stremio gets it when you switch to ${p.name}.`}</p>
+        <p class="hint">Top to bottom is the order Stremio uses. ${active ? 'Saving updates Stremio right away.' : `Stremio gets these when you switch to ${p.name}.`}</p>
         <ul class="addon-list" data-addon-list data-kind="manager">${addons.map((a) => managerAddonRow(a))}</ul>
         <noscript><p class="hint">Changing the order needs JavaScript; removing and adding work without it.</p></noscript>
 
@@ -665,7 +662,6 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
         <input type="hidden" name="base" value="${base}">
         <h2>${p.name} · Cinemeta</h2>
         ${cinemeta.present ? html`
-          <p class="hint">Cinemeta is Stremio's built-in catalog add-on. These only change ${p.name}.</p>
           <div class="switches">${cinemetaSwitches('', cinemeta.settings)}</div>
           <div class="warn" data-meta-warning ${cinemeta.settings.removeMeta && !cinemeta.otherMeta ? '' : 'hidden'}>${icon.alert}<span>Details pages are off and no other add-on of ${p.name} gives them for IMDb-id titles, so those will open without descriptions or episode lists. Fine if ${p.name} only uses another add-on's ids (e.g. TMDB ids).</span></div>
           ${cinemeta.wrapped ? wrapperWarning({
@@ -674,15 +670,14 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
             hidden: cinemeta.settings.hidePopular && cinemeta.settings.hideNew && cinemeta.settings.hideFeatured,
             action: html`<button type="submit" name="handoff" value="${cinemeta.wrappedRef}" class="link">Let ${cinemeta.wrappedName} show them instead</button>`,
           }) : ''}
-          <p class="hint">Its Calendar and Last videos catalogs always stay: Stremio's Calendar and new-episode notifications only come from them, so they're never hidden.</p>
+          <p class="hint" data-cm-calendar ${Object.values(cinemeta.settings).some(Boolean) ? '' : 'hidden'}>Its Calendar and new-episode catalogs always stay on.</p>
           <div class="row spread">
             <button type="submit" formaction="/profiles/${p.id}/cinemeta/reset" data-confirm-click="Put Cinemeta back exactly as Stremio ships it?">Reset to Stremio's default</button>
             <button type="submit" class="primary">Save</button>
           </div>`
         : html`<p class="hint">${p.name} doesn't have Cinemeta${cinemeta.wrapped ? ' (only a copy wrapped by another add-on, which these settings can\'t change)' : ''}.</p>
           <div class="warn">${icon.alert}<span class="stack-sm"><span>${NO_CINEMETA_EFFECT}${cinemeta.wrapped ? ` ${cinemeta.wrappedName} doesn't count: Stremio looks for Cinemeta's own add-on.` : ''}</span>
-            <button type="submit" formaction="/profiles/${p.id}/cinemeta/add" class="link">Add Cinemeta</button></span></div>
-          <p class="hint">It goes at the bottom of the list. If another add-on already gives details pages, it's added as a shell (rows, search and details off) so only the Calendar and new-episode catalogs are used.</p>`}
+            <button type="submit" formaction="/profiles/${p.id}/cinemeta/add" class="link">Add Cinemeta</button></span></div>`}
       </form>
       </div>
     </div>`,
