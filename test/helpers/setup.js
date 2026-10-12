@@ -3,6 +3,7 @@ import { createSelfAddon } from '../../src/addon/manifest.js';
 import { Cipher } from '../../src/crypto.js';
 import { openDatabase } from '../../src/db.js';
 import { AccountsService } from '../../src/core/accounts.js';
+import { Settings } from '../../src/core/settings.js';
 import { FetchError } from '../../src/core/fetchGuard.js';
 import { StremioClient } from '../../src/stremio/client.js';
 import { CINEMETA_URL, FakeStremio, addon, cinemetaManifest, libItem, notif } from './fakeStremio.js';
@@ -32,18 +33,32 @@ export function fakeManifests() {
  * An AccountsService on an in-memory database and a fake Stremio.
  * `ctx.signIn()` signs in to the fake (creating the account the first time)
  * and points `ctx.service` / `ctx.repo` at that account.
- * `withAddon` turns on the M2 self-insert. `access` is the sign-in rule.
+ * `withAddon` turns on the M2 self-insert. `access` is the sign-in rule, given
+ * to `ctx.settings` as if it came from the environment (the Server tab can
+ * then override it); `env` adds other environment settings.
  */
-export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32), withAddon = false, access = { mode: 'owner' }, web = fakeManifests() } = {}) {
+export function makeService({ fake = new FakeStremio(), key = crypto.randomBytes(32), withAddon = false, access = { mode: 'owner' }, env = {}, admins = [], web = fakeManifests() } = {}) {
   const db = openDatabase(null, { filename: ':memory:' });
   const cipher = new Cipher(key);
   let clock = Date.parse('2026-10-10T12:00:00.000Z');
   const now = () => (clock += 1000);
   const stremio = new StremioClient({ fetchImpl: fake.fetch, sleep: noSleep });
-  const selfAddon = withAddon ? createSelfAddon({ publicUrl: PUBLIC_URL }) : null;
-  const accounts = new AccountsService({ db, cipher, stremio, sleep: noSleep, now, selfAddon, access, fetchManifest: web.fetchManifest });
+  const settings = new Settings({
+    db,
+    now,
+    env: {
+      ACCESS: access.mode,
+      ALLOWED_ACCOUNTS: (access.allowed ?? []).join(','),
+      MAX_ACCOUNTS: access.maxAccounts != null && Number.isFinite(access.maxAccounts) ? String(access.maxAccounts) : '',
+      ...env,
+    },
+  });
+  const selfAddon = withAddon ? createSelfAddon({ publicUrl: PUBLIC_URL }, () => settings.addon()) : null;
+  const accounts = new AccountsService({
+    db, cipher, stremio, sleep: noSleep, now, selfAddon, access: () => settings.access(), admins, fetchManifest: web.fetchManifest,
+  });
   const ctx = {
-    fake, db, cipher, stremio, accounts, web, service: null, repo: null,
+    fake, db, cipher, stremio, accounts, settings, web, service: null, repo: null,
     advance(ms) { clock += ms; },
     async signIn(email = fake.user.email, password = fake.password) {
       const result = await accounts.signIn(email, password);

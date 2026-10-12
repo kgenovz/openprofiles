@@ -4,7 +4,7 @@ import { silentLogger } from '../log.js';
 import { BIN_DAYS } from './service.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SNAPSHOT_RE = /^openprofiles-(\d{4}-\d{2}-\d{2})\.db$/;
+export const SNAPSHOT_RE = /^openprofiles-(\d{4}-\d{2}-\d{2})\.db$/;
 const KEEP_DAILY = 7;
 const KEEP_WEEKLY_DAYS = 28;
 
@@ -67,8 +67,10 @@ export async function runDaily({ db, dataDir, accounts, log = silentLogger, now 
     }
     if (i < ids.length - 1) await pause();
   }
-  db.prepare("INSERT INTO meta (key, value) VALUES ('last_daily', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
-    .run(dayOf(now()));
+  const setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
+  setMeta.run('last_daily', dayOf(now()));
+  // Counts only, for the Server tab.
+  setMeta.run('last_daily_summary', JSON.stringify({ at: now(), ...summary, snapshot: Boolean(summary.snapshot) }));
   log.info('Daily jobs done', { ...summary, snapshot: summary.snapshot ? path.basename(summary.snapshot) : null });
   return summary;
 }

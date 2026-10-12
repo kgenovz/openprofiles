@@ -242,6 +242,17 @@ const MIGRATIONS = [
   ALTER TABLE backups ADD COLUMN after_hash TEXT;
   ALTER TABLE accounts ADD COLUMN notifs_foreign INTEGER NOT NULL DEFAULT 0;
   `,
+  // The Server tab (2026-10-12).
+  //   settings               what the owner set on the Server tab; each row overrides its env var
+  //   meta.owner_account_id  the account that runs the server: the first one to sign in
+  `
+  CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  INSERT INTO meta (key, value) SELECT 'owner_account_id', CAST(MIN(id) AS TEXT) FROM accounts HAVING COUNT(*) > 0;
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

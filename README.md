@@ -64,6 +64,11 @@ https.
    | `ALLOW_PRIVATE_ADDONS` | no | `true` lets the add-on manager fetch add-ons on private networks (a home LAN). Off by default |
    | `OPERATOR` | no | On a shared server (`list` or `open`), who runs it; shown on the sign-in and privacy pages |
    | `PRIVACY_NOTE` | no | One more line for the privacy page about your setup, e.g. `The web proxy keeps no access logs.` |
+   | `ADMINS` | no | Stremio emails or user ids that may use the **Server** tab besides the owner (the first account to sign in) |
+
+   `ACCESS`, `ALLOWED_ACCOUNTS`, `MAX_ACCOUNTS`, `LOG_LEVEL`, `OPERATOR` and `PRIVACY_NOTE` are
+   starting values: the **Server** tab can change each of them later without a restart (see
+   [Running the server](#running-the-server)).
 
 2. Put it behind a reverse proxy that handles https. With [Caddy](https://caddyserver.com):
 
@@ -106,6 +111,31 @@ that sleeps when idle or wipes its disk on restart doesn't suit it.
 `/data` holds the database **and** `secret.key`. Everything stored is encrypted with that key
 (add-on links often contain debrid keys, and libraries are watch history). Without the key, the
 saved profiles and backups can't be read. Back up the whole volume.
+
+## Running the server
+
+Whoever signed in first owns the server and gets a **Server** tab (so do any `ADMINS`). Nobody
+else sees it, and it only ever shows counts: nothing on it names or picks out an account.
+
+- **Overview:** accounts (of the limit, new this week, used this week, with the add-on
+  installed, unused for 60 days), switches per day this week and any that didn't finish, the
+  daily jobs' last run, the database copies, memory, database size and free disk, and the
+  errors and warnings since the server started, grouped by message (details stay in the log).
+- **Who can sign in:** the access rule, the list and the account limit. The owner can always
+  sign in, whatever the rule, so a list without them can't lock them out.
+- **Look:** the server's name, accent colour, logo (PNG, JPG or WebP; it is redrawn as a
+  256 px PNG, so nothing else in the file is kept) and light, dark or automatic appearance.
+- **Sign-in page, announcement, about:** the headline and introduction, a notice shown at the
+  top of every page, who runs it, a contact link, the privacy note, and whether the pages link
+  to OpenProfiles on GitHub.
+- **In Stremio:** the add-on's name and description and the Home row's name. Installed copies
+  pick them up at their next switch.
+- **Server log:** how much it writes.
+
+A value saved there overrides its environment variable, and the tab says so ("Overrides .env")
+with a way back to the `.env` value. `PUBLIC_URL`, `SECRET_KEY`, `TRUST_PROXY`,
+`STREMIO_API_URL`, `ALLOW_PRIVATE_ADDONS`, `PORT` and `DATA_DIR` stay in the environment only:
+they decide where the server lives and what it trusts.
 
 ## Backups and recovery
 
@@ -190,6 +220,8 @@ are public domain (CC0): Lorelei, Notionists, Open Peeps, Pixel Art and Thumbs.
 - Each Stremio account on a server only ever sees and changes its own profiles and backups.
 - The server log never records emails, IP addresses, add-on links or watch history; add-on
   tokens in request paths are masked. `/privacy` lists everything that is kept.
+- The **Server** tab answers "not found" to everyone but the owner (and `ADMINS`), and settings
+  that could redirect sign-ins or reach private networks can't be changed from it.
 
 ## Development
 

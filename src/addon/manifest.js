@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { DEFAULT_ADDON_DESCRIPTION, DEFAULT_CATALOG_NAME, DEFAULT_NAME } from '../core/settings.js';
 
 const { version } = createRequire(import.meta.url)('../../package.json');
 
@@ -8,15 +9,26 @@ export const CATALOG_TYPE = 'OpenProfiles';
 export const CATALOG_ID = 'openprofiles';
 export const ID_PREFIX = 'openprofiles:';
 
-export function buildManifest({ publicUrl }) {
+/** How the add-on presents itself; the Server tab can change all of it (Settings.addon()). */
+export const DEFAULT_PRESENTATION = {
+  name: DEFAULT_NAME, description: DEFAULT_ADDON_DESCRIPTION, catalogName: DEFAULT_CATALOG_NAME, logoVersion: null,
+};
+
+/**
+ * The catalog type stays "OpenProfiles" whatever the add-on is called: Stremio
+ * keeps it with installed copies and in its library, so changing it would
+ * break the row until the next switch.
+ */
+export function buildManifest({ publicUrl }, presentation = DEFAULT_PRESENTATION) {
+  const p = { ...DEFAULT_PRESENTATION, ...presentation };
   return {
     id: ADDON_ID,
     version,
-    name: 'OpenProfiles',
-    description: 'Switch between the profiles saved for this Stremio account. Opening a profile switches to it; tap its stream to refresh Stremio.',
-    logo: `${publicUrl}/logo.png`,
+    name: p.name,
+    description: p.description,
+    logo: `${publicUrl}/logo.png${p.logoVersion ? `?v=${p.logoVersion}` : ''}`,
     types: [CATALOG_TYPE],
-    catalogs: [{ type: CATALOG_TYPE, id: CATALOG_ID, name: 'Switch profile' }],
+    catalogs: [{ type: CATALOG_TYPE, id: CATALOG_ID, name: p.catalogName }],
     // One meta resource only: stremio-core matches the first one, and without
     // it Stremio says "No addons were requested for this meta" and never asks
     // for streams.
@@ -29,8 +41,12 @@ export function buildManifest({ publicUrl }) {
   };
 }
 
-/** What the switch needs to keep OpenProfiles installed in every profile it writes. */
-export function createSelfAddon({ publicUrl }) {
+/**
+ * What the switch needs to keep OpenProfiles installed in every profile it
+ * writes. `presentation` returns the current name and texts, so a switch
+ * also carries the Server tab's latest ones into Stremio.
+ */
+export function createSelfAddon({ publicUrl }, presentation = () => DEFAULT_PRESENTATION) {
   const manifestUrl = (token) => `${publicUrl}/${token}/manifest.json`;
   return {
     id: ADDON_ID,
@@ -38,7 +54,7 @@ export function createSelfAddon({ publicUrl }) {
     descriptor: (token) => ({
       transportUrl: manifestUrl(token),
       transportName: '',
-      manifest: buildManifest({ publicUrl }),
+      manifest: buildManifest({ publicUrl }, presentation()),
       flags: {},
     }),
   };

@@ -11,9 +11,11 @@ import {
  *   list   only `allowed` (Stremio emails or user ids)
  *   open   anyone, up to `maxAccounts` (a hosted instance)
  * Accounts that already exist can always sign back in, except under `list`
- * when they have been taken off the list.
+ * when they have been taken off the list. Whoever runs the server (`admin`)
+ * always gets in, so no rule saved on the Server tab can lock them out.
  */
-export function accessDecision({ mode, allowed = [], maxAccounts = Infinity }, { user, existing, accountCount }) {
+export function accessDecision({ mode, allowed = [], maxAccounts = Infinity }, { user, existing, accountCount, admin = false }) {
+  if (admin) return null;
   const listed = allowed.some((entry) => entry.toLowerCase() === user.email.toLowerCase() || entry === user.id);
   if (mode === 'list') {
     return listed ? null : "Your Stremio account isn't on this server's list. Ask whoever runs it to add you.";
@@ -33,7 +35,12 @@ export function accessDecision({ mode, allowed = [], maxAccounts = Infinity }, {
  * own ProfilesService, so each has its own lock and only sees its own rows.
  */
 export class AccountsService {
-  constructor({ db, cipher, stremio, log = silentLogger, sleep, now = () => Date.now(), selfAddon = null, access = { mode: 'owner' }, fetchManifest = null }) {
+  /**
+   * `access` is the sign-in rule, or a function returning it (the Server tab
+   * can change it while running). `admins`: Stremio emails or user ids that run
+   * the server besides its owner (the first account), from ADMINS.
+   */
+  constructor({ db, cipher, stremio, log = silentLogger, sleep, now = () => Date.now(), selfAddon = null, access = { mode: 'owner' }, admins = [], fetchManifest = null }) {
     this.db = db;
     this.cipher = cipher;
     this.stremio = stremio;
@@ -41,7 +48,8 @@ export class AccountsService {
     this.sleep = sleep;
     this.now = now;
     this.selfAddon = selfAddon;
-    this.access = access;
+    this.access = typeof access === 'function' ? access : () => access;
+    this.admins = admins;
     this.fetchManifest = fetchManifest;
     this.accounts = new Accounts(db, cipher, now);
     this.services = new Map();
@@ -69,6 +77,24 @@ export class AccountsService {
     return this.accounts.byId(accountId);
   }
 
+  /** The account that runs the server: the first one ever set up. */
+  ownerId() {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'owner_account_id'").get();
+    return row ? Number(row.value) : null;
+  }
+
+  /** Whether this account runs the server (and sees the Server tab). */
+  isAdmin(accountId) {
+    if (accountId == null) return false;
+    if (accountId === this.ownerId()) return true;
+    const account = this.accounts.byId(accountId);
+    return Boolean(account && this.listedAdmin({ email: account.stremio_email, id: account.stremio_user_id }));
+  }
+
+  listedAdmin(user) {
+    return this.admins.some((entry) => entry.toLowerCase() === String(user.email).toLowerCase() || entry === user.id);
+  }
+
   signIn(email, password) {
     return this.signInLock.run(async () => {
       const authKey = await this.stremio.login(email, password);
@@ -77,9 +103,11 @@ export class AccountsService {
         throw new UserError('CHILD_PROFILE', 'That sign-in belongs to a profile inside another Stremio account. Sign in with the main account.');
       }
       const existing = this.accounts.byStremioUserId(user.id);
-      const refusal = accessDecision(this.access, { user, existing, accountCount: this.accounts.count() });
+      const access = this.access();
+      const admin = (existing && existing.id === this.ownerId()) || this.listedAdmin(user);
+      const refusal = accessDecision(access, { user, existing, accountCount: this.accounts.count(), admin });
       if (refusal) {
-        this.log.warn('Sign-in refused by the access rule', { mode: this.access.mode });
+        this.log.warn('Sign-in refused by the access rule', { mode: access.mode });
         throw new UserError('NOT_ALLOWED', refusal);
       }
       const warnings = [];
@@ -104,6 +132,8 @@ export class AccountsService {
         const profileId = repo.insertProfile({ name: 'Original', avatarPreset: 'initial', avatarColour: DEFAULT_COLOUR, stremioUserId: user.id, snapshot });
         repo.setActiveProfile(profileId);
         repo.insertBackup({ kind: 'original', label: 'Account as it was at setup', stremioUserId: user.id, snapshot });
+        // The first account ever set up runs the server.
+        this.db.prepare("INSERT INTO meta (key, value) VALUES ('owner_account_id', ?) ON CONFLICT (key) DO NOTHING").run(String(id));
         return id;
       })();
       this.forAccount(accountId).noteAddons(live.addons);

@@ -627,3 +627,88 @@ window.addEventListener('pageshow', () => {
     button.textContent = button.dataset.label;
   }
 });
+
+// ── Server tab ──────────────────────────────────────────────────────────────
+
+// Who can sign in: only the field for the picked rule shows.
+const accessForm = document.querySelector('form#access');
+if (accessForm) {
+  const sync = () => {
+    const mode = accessForm.querySelector('input[name="access"]:checked')?.value;
+    for (const el of accessForm.querySelectorAll('[data-access-for]')) el.hidden = el.dataset.accessFor !== mode;
+  };
+  accessForm.addEventListener('change', sync);
+  sync();
+}
+
+// Look: the swatches set the colour field; the preview follows the name and colour.
+const lookForm = document.querySelector('form#look');
+if (lookForm) {
+  const input = lookForm.querySelector('[data-accent-input]');
+  const swatches = [...lookForm.querySelectorAll('[data-accent]')];
+  const preview = lookForm.querySelector('[data-brand-preview]');
+  // The button colours theme.js would make: white labels on a darkened mid-tone, dark ones on a light colour.
+  const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const lum = (c) => c.map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+    .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const onWhite = (c) => 1.05 / (lum(c) + 0.05);
+  const button = (hex) => {
+    const c = rgb(hex);
+    if (onWhite(c) < 3) return { background: hex, text: '#1b1b1f' };
+    for (let t = 0; t <= 1; t += 0.05) {
+      const d = c.map((v) => Math.round(v * (1 - t)));
+      if (onWhite(d) >= 4.5) return { background: `rgb(${d.join(',')})`, text: '#ffffff' };
+    }
+    return { background: '#000000', text: '#ffffff' };
+  };
+  const paint = () => {
+    const colour = input.value.toLowerCase();
+    const b = button(colour);
+    preview.style.setProperty('--p', colour);
+    preview.style.setProperty('--pb', b.background);
+    preview.style.setProperty('--pt', b.text);
+    for (const s of swatches) s.setAttribute('aria-pressed', String(s.dataset.accent === colour));
+  };
+  for (const s of swatches) {
+    s.hidden = false;
+    s.addEventListener('click', () => { input.value = s.dataset.accent; paint(); });
+  }
+  input.addEventListener('input', paint);
+  const name = lookForm.querySelector('[data-preview-name]');
+  name.addEventListener('input', () => { lookForm.querySelector('[data-preview-name-out]').textContent = name.value.trim() || 'OpenProfiles'; });
+
+  // The logo uploads on its own, as soon as a file is picked.
+  const upload = lookForm.querySelector('[data-logo-upload]');
+  const file = lookForm.querySelector('[data-logo-file]');
+  const status = lookForm.querySelector('[data-logo-status]');
+  upload.hidden = false;
+  file.addEventListener('change', async () => {
+    const picked = file.files[0];
+    if (!picked) return;
+    if (picked.size > 2 * 1024 * 1024) {
+      status.textContent = 'That picture is over 2 MB. Pick a smaller one.';
+      return;
+    }
+    status.textContent = 'Uploading…';
+    try {
+      const res = await fetch('/admin/logo', {
+        method: 'POST',
+        headers: { 'x-csrf-token': file.dataset.csrf, 'content-type': picked.type || 'application/octet-stream' },
+        body: picked,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "That picture couldn't be uploaded.");
+      location.reload();
+    } catch (err) {
+      status.textContent = err.message;
+    }
+  });
+}
+
+// In Stremio: the row title follows the row name.
+const rowName = document.querySelector('[data-row-name]');
+if (rowName) {
+  rowName.addEventListener('input', () => {
+    document.querySelector('[data-row-name-out]').textContent = rowName.value.trim() || 'Switch profile';
+  });
+}

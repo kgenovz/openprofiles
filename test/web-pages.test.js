@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { decodeSnapshot } from '../src/core/guard.js';
+import { Settings } from '../src/core/settings.js';
 import { silentLogger } from '../src/log.js';
 import { createApp } from '../src/web/app.js';
 import { Browser } from './helpers/browser.js';
@@ -27,7 +28,7 @@ describe('web pages', () => {
       withAddon: true,
     });
     const config = { publicUrl: 'https://profiles.example.com', trustProxy: false };
-    const app = createApp({ config, db: ctx.db, accounts: ctx.accounts, log: silentLogger });
+    const app = createApp({ config, db: ctx.db, accounts: ctx.accounts, settings: ctx.settings, log: silentLogger });
     server = app.listen(0);
     await new Promise((resolve) => server.once('listening', resolve));
     base = `http://127.0.0.1:${server.address().port}`;
@@ -129,8 +130,9 @@ describe('web pages', () => {
 
   it('a shared server says who runs it and what it keeps; the privacy page is public', async () => {
     const shared = createApp({
-      config: { publicUrl: 'https://profiles.example.com', trustProxy: false, access: { mode: 'open' }, operator: 'kgenovz', privacyNote: 'The web proxy keeps no access logs.' },
+      config: { publicUrl: 'https://profiles.example.com', trustProxy: false },
       db: ctx.db, accounts: ctx.accounts, log: silentLogger,
+      settings: new Settings({ db: ctx.db, env: { ACCESS: 'open', OPERATOR: 'kgenovz', PRIVACY_NOTE: 'The web proxy keeps no access logs.' } }),
     }).listen(0);
     await new Promise((resolve) => shared.once('listening', resolve));
     const other = `http://127.0.0.1:${shared.address().port}`;

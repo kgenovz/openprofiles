@@ -357,6 +357,35 @@ day, checked hourly and two minutes after boot.
   `last-videos` / `calendar-videos`. Reset re-fetches the stock manifest (SSRF-guarded); if
   that fails, refuse rather than half-restore.
 
+### Server tab (owner only)
+
+*Built 2026-10-12* (migration 7: `settings`, `meta.owner_account_id`). Design: "Server tab"
+board on the Phase 2 page of the design canvas. Kyle's brief: observability with the smallest
+amount of useful information and nothing exposing users; every env var that isn't a security
+concern editable; full control of how the server presents itself.
+
+- **Who:** the owner is the first account ever set up (recorded at sign-in; migration 7 back-fills
+  the lowest id). `ADMINS` (emails or Stremio user ids) adds more, and is the recovery path if
+  the owner's account is deleted. The owner always passes the access rule. Everyone else gets a
+  404 for `/admin` and its POSTs.
+- **Settings** (`core/settings.js`): saved value → env var → default, read on every request.
+  Saving the value it would have anyway deletes the override. Editable: `ACCESS`,
+  `ALLOWED_ACCOUNTS`, `MAX_ACCOUNTS`, `LOG_LEVEL`, `OPERATOR`, `PRIVACY_NOTE`, plus new ones:
+  name, accent, appearance, logo, sign-in headline and intro, GitHub links on/off,
+  announcement, contact, add-on name, description and row name. Env only: `PUBLIC_URL`,
+  `SECRET_KEY`, `TRUST_PROXY`, `STREMIO_API_URL`, `ALLOW_PRIVATE_ADDONS`, `PORT`, `DATA_DIR`.
+- **Theming:** the CSP allows no inline styles, so the accent is `/theme.css?v=`. Buttons keep
+  white labels by darkening a mid-tone accent to 4.5:1 (a light accent gets dark labels); links
+  are moved toward black/white until they read on both themes. Appearance sets `data-theme` on
+  `<html>`; app.css's dark tokens are guarded so either choice wins.
+- **Logo:** uploaded as raw bytes by app.js, decoded by sharp (PNG/JPEG/WebP only, 2 MB) and
+  redrawn as a 256 px PNG; it's the page header, favicon and the add-on's Stremio logo.
+- **Add-on:** name, description and row name go into the manifest; the catalog type stays
+  "OpenProfiles" (installed copies and libraries keep it).
+- **Observability** (`core/stats.js`): counts only. Errors and warnings are counted by their
+  fixed log message in memory (`log.problems()`), never their fields. The daily jobs store a
+  count summary in `meta.last_daily_summary`.
+
 ## Open questions for Kyle
 
 - Default access rule for a self-hosted server: `owner` (first sign-in claims it) is the plan.

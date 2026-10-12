@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import { CHARACTERS, GENERATED_STYLES, avatarLabel, parseAvatar, randomSeed } from '../addon/avatars.js';
 import { addonDetail } from '../core/addons.js';
 import { STOCK_SETTINGS, describeSettings } from '../core/cinemeta.js';
+import { ACCENT_COLOURS, DEFAULT_HEADLINE, DEFAULT_INTRO } from '../core/settings.js';
 import { AVATAR_COLOURS, BIN_DAYS, DEFAULT_COLOUR, MAX_PROFILES } from '../core/service.js';
 import { html } from './html.js';
+import { buttonColours } from './theme.js';
 
 // Static files are cached for an hour; a content hash in their URLs makes updates show at once.
 const ASSET_VERSION = crypto.createHash('sha1')
@@ -21,6 +23,18 @@ const TABS = [
   ['install', 'Install in Stremio', '/install'],
   ['account', 'Account', '/account'],
 ];
+// Only whoever runs the server sees this one.
+const ADMIN_TAB = ['server', 'Server', '/admin'];
+
+/** How the pages present the server when nothing was customised (Settings.branding() plus who's looking). */
+export const DEFAULT_SITE = {
+  name: 'OpenProfiles', accent: null, appearance: 'auto', customLogo: false, logoVersion: null, themeVersion: null,
+  headline: DEFAULT_HEADLINE, intro: DEFAULT_INTRO, selfHostLinks: true, announcement: null, contact: null,
+  operator: null, privacyNote: null, shared: false, admin: false,
+};
+
+/** A contact the owner gave: an https link or an email address. */
+const contactHref = (contact) => (contact.startsWith('https://') ? contact : `mailto:${contact}`);
 
 const BACKUP_GROUPS = [
   { title: 'Automatic', keep: 'daily, the last 14 kept', kinds: ['auto'] },
@@ -121,6 +135,7 @@ const icon = {
   grip: html`<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>`,
   up: html`<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>`,
   down: html`<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>`,
+  megaphone: html`<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h3l5 4V6L7 10z"/><path d="M16 9.5a3.5 3.5 0 0 1 0 5"/></svg>`,
   back: html`<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>`,
 };
 
@@ -132,39 +147,48 @@ function colourPicker(name, selected) {
   </fieldset>`;
 }
 
-/** `tab` highlights a section of the signed-in navigation; without `csrf` the header is bare (sign-in, errors). */
-export function layout({ title, body, account, csrf, tab = null, wide = false }) {
+/**
+ * `tab` highlights a section of the signed-in navigation; without `csrf` the header is bare (sign-in, errors).
+ * `site`: the server's name, colours, logo and notices from the Server tab, and whether the viewer runs it.
+ */
+export function layout({ title, body, account, csrf, tab = null, wide = false, site = DEFAULT_SITE }) {
+  const logo = `/logo.png${site.logoVersion ? `?v=${site.logoVersion}` : ''}`;
+  const tabs = site.admin ? [...TABS, ADMIN_TAB] : TABS;
   return html`<!doctype html>
-<html lang="en">
+<html lang="en" ${site.appearance === 'light' || site.appearance === 'dark' ? html`data-theme="${site.appearance}"` : ''}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>${title} · OpenProfiles</title>
-  <link rel="icon" href="/logo.png">
+  <title>${title} · ${site.name}</title>
+  <link rel="icon" href="${logo}">
   <link rel="stylesheet" href="/fonts/400.css">
   <link rel="stylesheet" href="/fonts/600.css">
   <link rel="stylesheet" href="/fonts/800.css">
   <link rel="stylesheet" href="/static/app.css?v=${ASSET_VERSION}">
+  ${site.accent ? html`<link rel="stylesheet" href="/theme.css?v=${site.themeVersion ?? ''}">` : ''}
   <script src="/static/app.js?v=${ASSET_VERSION}" defer></script>
 </head>
 <body>
   <header class="top">
     <div class="top-inner">
       <div class="top-row">
-        <a class="brand" href="/configure"><span class="brand-mark">${icon.logo}</span>OpenProfiles</a>
+        <a class="brand" href="/configure">${site.customLogo
+          ? html`<img class="brand-logo" src="${logo}" alt="" width="30" height="30">`
+          : html`<span class="brand-mark">${icon.logo}</span>`}${site.name}</a>
         ${csrf ? html`<div class="top-right">
           ${account ? html`<span class="hint top-email">${account.email}</span>` : ''}
           ${postButton({ action: '/logout', csrf, label: 'Sign out', style: 'link' })}
         </div>` : ''}
       </div>
       ${csrf && tab ? html`<nav class="tabs" aria-label="Sections">
-        ${TABS.map(([id, label, href]) => html`<a href="${href}" ${id === tab ? html`aria-current="page"` : ''}>${label}</a>`)}
+        ${tabs.map(([id, label, href]) => html`<a href="${href}" ${id === tab ? html`aria-current="page"` : ''}>${label}</a>`)}
       </nav>` : ''}
     </div>
   </header>
+  ${site.announcement ? html`<div class="announcement" role="status"><div class="announcement-inner">${icon.megaphone}<p>${site.announcement}</p></div></div>` : ''}
   <main class="${wide ? 'wide' : ''}">${body}</main>
-  <footer class="foot"><a href="/privacy">What this server keeps</a> · <a href="${REPO_URL}" rel="noopener">OpenProfiles on GitHub</a></footer>
+  <footer class="foot"><a href="/privacy">What this server keeps</a>${site.contact ? html` · <a href="${contactHref(site.contact)}" rel="noopener">Contact</a>` : ''}${site.selfHostLinks ? html` · <a href="${REPO_URL}" rel="noopener">OpenProfiles on GitHub</a>` : ''}</footer>
 </body>
 </html>`;
 }
@@ -197,24 +221,25 @@ function undoBanner(undo, csrf) {
 }
 
 /** From the "Sign in with Stremio" board of the Phase 2 design. */
-/** `instance.shared`: anyone (or a list) can sign in here, so say who runs it and what it keeps. */
-export function signInPage({ error, notice, email = '', again = false, instance = {} } = {}) {
+/** `site.shared`: anyone (or a list) can sign in here, so say who runs it and what it keeps. */
+export function signInPage({ site = DEFAULT_SITE, error, notice, email = '', again = false } = {}) {
   const steps = [
     html`Sign in with Stremio. Your account as it is now becomes your <strong>Original</strong> profile, and a permanent backup of it is kept.`,
     html`Make more profiles: a name and picture, the add-ons each one should have.`,
     html`Install the add-on once. Every profile shows up on Stremio's Home; open one to switch.`,
   ];
   return layout({
+    site,
     title: 'Sign in',
     body: html`<div class="signin">
       <section class="signin-pitch">
-        <h1>Profiles for your Stremio account</h1>
-        <p class="lede">Give everyone in the house their own library, Continue Watching and add-ons, and switch from a row on Stremio's Home.</p>
+        <h1>${site.headline}</h1>
+        <p class="lede">${site.intro}</p>
         <ol class="steps">${steps.map((s, i) => html`<li><span class="step-n">${i + 1}</span><span>${s}</span></li>`)}</ol>
       </section>
       <section class="card signin-card">
         <h2>${again ? 'Sign in to Stremio again' : 'Sign in with Stremio'}</h2>
-        ${again ? html`<p class="hint">Stremio signed OpenProfiles out. Sign in again; your profiles are all still here.</p>` : ''}
+        ${again ? html`<p class="hint">Stremio signed ${site.name} out. Sign in again; your profiles are all still here.</p>` : ''}
         ${notice ? html`<div class="flash flash-ok">${icon.check}<p>${notice}</p></div>` : ''}
         ${error ? html`<div class="flash flash-error" role="alert">${icon.alert}<p>${error}</p></div>` : ''}
         <form method="post" action="/signin" class="stack">
@@ -222,12 +247,12 @@ export function signInPage({ error, notice, email = '', again = false, instance 
           <label>Stremio password <input type="password" name="password" autocomplete="current-password" required ${email ? 'autofocus' : ''}></label>
           <button type="submit" class="primary">Sign in</button>
         </form>
-        <p class="hint">${icon.lock} Your password goes to Stremio once to get a sign-in key, and is never stored. OpenProfiles only changes your own account.</p>
-        ${instance.shared ? html`<div class="shared-note">
-          <p><strong>A shared server${instance.operator ? html`, run by ${instance.operator}` : ''}.</strong>
+        <p class="hint">${icon.lock} Your password goes to Stremio once to get a sign-in key, and is never stored. ${site.name} only changes your own account.</p>
+        ${site.shared ? html`<div class="shared-note">
+          <p><strong>A shared server${site.operator ? html`, run by ${site.operator}` : ''}.</strong>
             It keeps your profiles, backups and Stremio sign-in key, encrypted. No tracking, and no logs of your email, IP address or add-on links.
             <a href="/privacy">What it keeps</a></p>
-          <p>Rather keep it to yourself? OpenProfiles is free and very light to run: <a href="${REPO_URL}" rel="noopener">host your own</a>.</p>
+          ${site.selfHostLinks ? html`<p>Rather keep it to yourself? OpenProfiles is free and very light to run: <a href="${REPO_URL}" rel="noopener">host your own</a>.</p>` : ''}
         </div>` : ''}
         <p class="hint fold-top">Have Stremio Supporter? It has built-in profiles that work on several devices at once; use those instead.</p>
       </section>
@@ -370,10 +395,11 @@ function profileEditor(d, { csrf, locked }) {
   </section>`;
 }
 
-export function profilesPage({ csrf, flash, status, addon, undo, editing = null }) {
+export function profilesPage({ site, csrf, flash, status, addon, undo, editing = null }) {
   const { account, profiles, activeProfileId, openJournal } = status;
   const locked = Boolean(openJournal);
   return layout({
+    site,
     title: editing ? `Edit ${editing.profile.name}` : 'Profiles',
     account,
     csrf,
@@ -446,7 +472,7 @@ function cinemetaSwitches(prefix, settings) {
  * and keeps the add-on ticks and Cinemeta switches in step with "Start from";
  * without it, every step shows and the form still works.
  */
-export function wizardPage({ csrf, account, options, error = null, values = {} }) {
+export function wizardPage({ site, csrf, account, options, error = null, values = {} }) {
   const { starts, pool, activeName } = options;
   const from = values.from ?? 'empty';
   const sourceStart = starts.profiles.find((p) => String(p.id) === String(values.source)) ?? null;
@@ -470,6 +496,7 @@ export function wizardPage({ csrf, account, options, error = null, values = {} }
   </label>`;
 
   return layout({
+    site,
     title: 'New profile',
     account,
     csrf,
@@ -617,9 +644,10 @@ function metadataCard(p, metadata, { csrf, base }) {
   </form>`;
 }
 
-export function addonManagerPage({ csrf, account, flash, manager, undo }) {
+export function addonManagerPage({ site, csrf, account, flash, manager, undo }) {
   const { profile: p, active, base, addons, pool, cinemeta } = manager;
   return layout({
+    site,
     title: `${p.name}'s add-ons`,
     account,
     csrf,
@@ -751,9 +779,10 @@ function everythingCard(csrf) {
   </section>`;
 }
 
-export function backupsPage({ csrf, account, flash, backups, bin = [], undo }) {
+export function backupsPage({ site, csrf, account, flash, backups, bin = [], undo }) {
   const latest = backups[0];
   return layout({
+    site,
     title: 'Backups',
     account,
     csrf,
@@ -818,8 +847,9 @@ export function backupsPage({ csrf, account, flash, backups, bin = [], undo }) {
  * restoring then only changes its saved copy. `addonsOnly`: the backup can put
  * back just its add-on list (an edit's backup whose profile still exists).
  */
-export function restorePreviewPage({ csrf, backup, active, locked, account, backupOf = null, addonsOnly = false }) {
+export function restorePreviewPage({ site, csrf, backup, active, locked, account, backupOf = null, addonsOnly = false }) {
   return layout({
+    site,
     title: 'Restore backup',
     account,
     csrf,
@@ -849,11 +879,12 @@ export function restorePreviewPage({ csrf, backup, active, locked, account, back
 
 // ── Install tab ──────────────────────────────────────────────────────────────
 
-export function installPage({ csrf, account, flash, addon }) {
+export function installPage({ site, csrf, account, flash, addon }) {
   const status = addon?.installed === true
     ? html`<span class="status status-ok">${icon.check} Installed on this account</span>`
     : addon?.installed === false ? html`<span class="status">Not installed yet</span>` : '';
   return layout({
+    site,
     title: 'Install in Stremio',
     account,
     csrf,
@@ -902,8 +933,9 @@ const deviceName = (ua = '') => {
 const ACTIVITY_SHOWN = 10;
 const activityItem = (a) => html`<li><span class="hint">${when(a.at)}</span><span>${a.detail}</span></li>`;
 
-export function accountPage({ csrf, account, flash, sessions = [], activity = [] }) {
+export function accountPage({ site, csrf, account, flash, sessions = [], activity = [] }) {
   return layout({
+    site,
     title: 'Account',
     account,
     csrf,
@@ -912,7 +944,7 @@ export function accountPage({ csrf, account, flash, sessions = [], activity = []
     <section class="card">
       <h1 class="h2">Signed in with Stremio</h1>
       <p>${account.email}</p>
-      <p class="hint">Your Stremio password isn't stored. If Stremio signs OpenProfiles out, <a href="/signin?again=1">sign in again</a>; your profiles stay.</p>
+      <p class="hint">Your Stremio password isn't stored. If Stremio signs ${site?.name ?? 'OpenProfiles'} out, <a href="/signin?again=1">sign in again</a>; your profiles stay.</p>
     </section>
 
     <section class="card" id="sessions">
@@ -938,7 +970,7 @@ export function accountPage({ csrf, account, flash, sessions = [], activity = []
     </section>
 
     <section class="card danger-card" id="delete">
-      <h2 class="h3">Delete my OpenProfiles account</h2>
+      <h2 class="h3">Delete my ${site?.name ?? 'OpenProfiles'} account</h2>
       <p class="hint">Removes your profiles and backups from this server. Your Stremio account stays exactly as it is right now.
         <a href="/backups#everything">Download everything</a> first if you might want them back.</p>
       <form method="post" action="/account/delete" class="row align-end">
@@ -950,13 +982,307 @@ export function accountPage({ csrf, account, flash, sessions = [], activity = []
   });
 }
 
-/** What the server keeps, in plain words. Every line here must stay true to the code. */
-export function privacyPage({ instance = {} } = {}) {
+// ── Server tab (whoever runs the server) ─────────────────────────────────────
+// From the "Server tab" board of the Phase 2 design: counts first, then the settings.
+
+const ADMIN_SECTIONS = [
+  ['access', 'Who can sign in'],
+  ['look', 'Look'],
+  ['signin', 'Sign-in page'],
+  ['announcement', 'Announcement'],
+  ['stremio', 'In Stremio'],
+  ['about', 'About this server'],
+  ['log', 'Server log'],
+];
+
+const ACCESS_CHOICES = [
+  ['owner', 'Only me', 'Nobody new can sign in.'],
+  ['list', 'People on a list', 'Stremio emails or user ids you add.'],
+  ['open', 'Anyone', 'Up to the limit you set.'],
+];
+
+const LOG_LEVELS = [
+  ['error', 'Errors only'],
+  ['warn', 'Errors and warnings'],
+  ['info', 'Normal'],
+  ['debug', 'Everything (for debugging)'],
+];
+
+const ACCENT_NAMES = ['Violet', 'Blue', 'Teal', 'Green', 'Amber', 'Orange', 'Red', 'Pink'];
+
+function bytes(n) {
+  if (n == null) return '?';
+  const units = ['bytes', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i++;
+  }
+  return `${i === 0 ? v : v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+function duration(ms) {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return plural(Math.max(minutes, 0), 'minute');
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return plural(hours, 'hour');
+  return plural(Math.floor(hours / 24), 'day');
+}
+
+const pill = (kind, text) => html`<span class="pill-status pill-${kind}">${text}</span>`;
+
+function sparkline(perDay) {
+  const max = Math.max(1, ...perDay);
+  const W = 196;
+  const H = 40;
+  const step = W / perDay.length;
+  return html`<svg class="spark" role="img" aria-label="Switches per day, last 7 days: ${perDay.join(', ')}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    ${perDay.map((n, i) => {
+      const h = Math.round((n / max) * (H - 4)) + 2;
+      return html`<rect x="${(i * step + 2).toFixed(1)}" y="${H - h}" width="${(step - 6).toFixed(1)}" height="${h}" rx="3" class="${i === perDay.length - 1 ? 'spark-now' : ''}"/>`;
+    })}
+  </svg>`;
+}
+
+function overview(stats) {
+  const { accounts: a, switches: s, daily: d, server: srv } = stats;
+  const full = a.limit != null && a.total >= a.limit;
+  const ranOn = d.summary?.at ? ago(d.summary.at) : null;
+  return html`<section class="admin-stats" aria-label="Overview">
+    <div class="card stat">
+      <span class="eyebrow">Accounts</span>
+      <span class="stat-big"><strong>${a.total}</strong>${a.limit != null ? html`<span class="hint">of ${a.limit}</span>` : ''}</span>
+      ${a.limit != null ? html`<span class="meter" role="img" aria-label="${a.total} of ${a.limit} places used"><span style="width:${Math.min(100, Math.round((a.total / a.limit) * 100))}%"></span></span>` : ''}
+      <ul class="stat-lines">
+        <li>${a.newThisWeek} new this week</li>
+        <li>${a.usedThisWeek} used in the last 7 days</li>
+        <li>${a.installed} with the add-on installed</li>
+      </ul>
+      ${full ? pill('bad', "Full: nobody new can sign in") : a.unused ? pill('warn', `${a.unused} unused for ${a.unusedDays} days`) : ''}
+    </div>
+
+    <div class="card stat">
+      <span class="eyebrow">Switches</span>
+      <span class="stat-big"><strong>${s.week}</strong><span class="hint">this week</span></span>
+      ${sparkline(s.perDay)}
+      <ul class="stat-lines">
+        <li>${s.today} in the last 24 hours</li>
+        <li>${plural(s.restoresThisWeek, 'restore')} this week</li>
+        ${s.rolledBackThisWeek ? html`<li>${s.rolledBackThisWeek} went back after a problem</li>` : ''}
+      </ul>
+      ${s.unfinished ? pill('warn', `${s.unfinished} unfinished`) : pill('ok', 'All finished')}
+    </div>
+
+    <div class="card stat">
+      <span class="eyebrow">Daily jobs</span>
+      <span class="stat-big stat-text"><strong>${ranOn ? `Ran ${ranOn}` : 'Not run yet'}</strong></span>
+      <ul class="stat-lines">
+        ${d.summary ? html`<li>${d.summary.backedUp} backed up · ${d.summary.skipped} unchanged</li>
+          <li>${d.summary.failed} failed${d.summary.purged ? ` · ${plural(d.summary.purged, 'profile')} emptied from bins` : ''}</li>` : html`<li>They run once a day, starting a few minutes after the server does.</li>`}
+        ${d.snapshots ? html`<li>Database copies: ${d.snapshots.daily} daily, ${d.snapshots.weekly} weekly</li>` : ''}
+      </ul>
+      ${d.late ? pill('warn', 'Late') : d.summary?.failed ? pill('warn', `${d.summary.failed} failed`) : d.summary ? pill('ok', 'On schedule') : ''}
+    </div>
+
+    <div class="card stat">
+      <span class="eyebrow">This server</span>
+      <span class="stat-big stat-text"><strong>Up ${duration(srv.uptimeMs)}</strong><span class="hint">v${srv.version}</span></span>
+      <dl class="stat-facts">
+        <dt>Memory</dt><dd>${bytes(srv.memory)}</dd>
+        <dt>Database</dt><dd>${bytes(srv.database)}</dd>
+        ${srv.diskFree != null ? html`<dt>Disk free</dt><dd>${bytes(srv.diskFree)}</dd>` : ''}
+        <dt>Profiles</dt><dd>${srv.profiles} · ${plural(srv.backups, 'backup')}</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Errors and warnings">
+    <div class="card-head">
+      <h2 class="h3">Errors and warnings</h2>
+      <span class="hint">Since the server started, ${duration(srv.uptimeMs)} ago. Details are in the server log.</span>
+    </div>
+    ${stats.problems.length ? html`<ul class="problems">
+      ${stats.problems.map((p) => html`<li>
+        ${pill(p.level === 'error' ? 'bad' : 'warn', p.level === 'error' ? 'Error' : 'Warning')}
+        <span class="problem-msg">${p.message}</span>
+        <span class="problem-count">×${p.count}</span>
+        <span class="hint problem-when">${ago(p.last)}</span>
+      </li>`)}
+    </ul>` : html`<p class="hint">None.</p>`}
+  </section>`;
+}
+
+/**
+ * Where a setting's value comes from. Overriding the environment offers a way
+ * back to it; the button submits the section's form to the reset route.
+ */
+function origin(d, key) {
+  if (d.source === 'env') return html`<span class="origin">From .env</span>`;
+  if (d.source === 'saved' && d.envSet) {
+    const short = d.envRaw && d.envRaw.length <= 24 ? ` (${d.envRaw})` : '';
+    return html`<span class="origin origin-saved">Overrides .env${short}</span>
+      <button type="submit" class="link small" formaction="/admin/reset/${key}" formnovalidate>Use .env</button>`;
+  }
+  return '';
+}
+
+/**
+ * A labelled control whose label row may carry the origin chip and its "Use .env"
+ * button. The button sits outside the <label>, so clicking the label never presses it.
+ */
+const field = (key, text, d, control, { narrow = false } = {}) => html`<div class="field ${narrow ? 'narrow-field' : ''}">
+  <span class="label-row"><label for="set-${key}">${text}</label>${origin(d, key)}</span>
+  ${control}
+</div>`;
+
+function settingsForm(id, title, csrf, body, { hint = null } = {}) {
+  return html`<form method="post" action="/admin/settings/${id}" class="card settings-card" id="${id}" aria-labelledby="${id}-title">
+    ${csrfField(csrf)}
+    <h2 class="h3" id="${id}-title">${title}</h2>
+    ${body}
+    ${hint ? html`<p class="hint">${hint}</p>` : ''}
+    <div class="row end"><button type="submit" class="primary">Save</button></div>
+  </form>`;
+}
+
+export function adminPage({ site, csrf, account, flash, stats, settings: d, fixed }) {
+  const v = (key) => d[key].value;
+  const accent = v('accent') ?? ACCENT_COLOURS[0];
+  const logo = `/logo.png?v=${site?.logoVersion ?? ''}`;
   return layout({
+    site,
+    title: 'Server',
+    account,
+    csrf,
+    tab: 'server',
+    body: html`${flashBlock(flash)}
+    <div class="section-head">
+      <h1>Server</h1>
+      <p class="hint">Only you see this tab. Every number is a count; none of it names an account.</p>
+    </div>
+
+    ${overview(stats)}
+
+    <div class="admin-settings">
+      <nav class="settings-nav card" aria-label="Settings sections">
+        <span class="eyebrow">Settings</span>
+        ${ADMIN_SECTIONS.map(([id, label]) => html`<a href="#${id}">${label}</a>`)}
+      </nav>
+
+      <div class="settings-body">
+        ${settingsForm('access', 'Who can sign in', csrf, html`
+          <fieldset class="choices access-choices" data-access>
+            <legend class="sr-only">Who can sign in</legend>
+            ${ACCESS_CHOICES.map(([value, title, body]) => html`<label class="choice">
+              <input type="radio" name="access" value="${value}" ${v('access') === value ? 'checked' : ''}>
+              <span class="choice-text"><strong>${title}</strong><span class="hint">${body}</span></span>
+            </label>`)}
+          </fieldset>
+          ${d.access.source !== 'default' ? html`<p class="label-row">${origin(d.access, 'access')}</p>` : ''}
+          <div data-access-for="list">${field('allowedAccounts', 'Stremio emails or user ids, one per line', d.allowedAccounts,
+            html`<textarea id="set-allowedAccounts" name="allowedAccounts" rows="4" autocomplete="off" spellcheck="false">${v('allowedAccounts').join('\n')}</textarea>`)}</div>
+          <div data-access-for="open">${field('maxAccounts', 'Most accounts', d.maxAccounts,
+            html`<input id="set-maxAccounts" type="number" name="maxAccounts" min="1" max="100000" step="1" value="${v('maxAccounts') ?? ''}" placeholder="No limit">`, { narrow: true })}</div>
+        `, { hint: 'You can always sign in, whatever the rule. Accounts already here keep working when the limit drops.' })}
+
+        ${settingsForm('look', 'Look', csrf, html`
+          <div class="look-grid">
+            <div class="stack">
+              <label>Name <input name="serverName" value="${v('serverName')}" maxlength="40" data-preview-name></label>
+              <fieldset class="accent-field">
+                <legend>Accent colour</legend>
+                <div class="row">
+                  ${ACCENT_COLOURS.map((c, i) => html`<button type="button" class="accent-swatch" style="--c:${c}" data-accent="${c}" aria-label="${ACCENT_NAMES[i]}" aria-pressed="${c === accent ? 'true' : 'false'}" hidden></button>`)}
+                  <label class="accent-custom"><span class="sr-only">Accent colour</span><input type="color" name="accent" value="${accent}" data-accent-input></label>
+                </div>
+              </fieldset>
+              <fieldset class="seg-field">
+                <legend>Appearance</legend>
+                <div class="seg">
+                  ${[['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([value, label]) => html`<label>
+                    <input type="radio" name="appearance" value="${value}" ${v('appearance') === value ? 'checked' : ''}><span>${label}</span></label>`)}
+                </div>
+              </fieldset>
+            </div>
+            <div class="stack">
+              <div class="logo-field">
+                <img class="logo-preview" src="${logo}" alt="Current logo" width="72" height="72" data-logo-preview>
+                <div class="stack-sm">
+                  <label class="button" data-logo-upload hidden>Upload a picture
+                    <input type="file" accept="image/png,image/jpeg,image/webp" class="sr-only" data-logo-file data-csrf="${csrf}"></label>
+                  ${site?.customLogo ? html`<button type="submit" class="link small" formaction="/admin/logo/remove" formnovalidate>Use the drawn logo</button>` : ''}
+                  <span class="hint" role="status" data-logo-status>PNG, JPG or WebP, square. Also the add-on's logo in Stremio.</span>
+                  <noscript><span class="hint">Uploading needs JavaScript turned on.</span></noscript>
+                </div>
+              </div>
+              <div class="brand-preview" style="--p:${accent};--pb:${buttonColours(accent).background};--pt:${buttonColours(accent).text}" data-brand-preview aria-hidden="true">
+                <div class="brand-preview-top"><span class="brand-preview-mark"></span><span data-preview-name-out>${v('serverName')}</span></div>
+                <div class="brand-preview-body"><span class="brand-preview-button">Switch</span><span class="hint">Preview</span></div>
+              </div>
+            </div>
+          </div>
+        `)}
+
+        ${settingsForm('signin', 'Sign-in page', csrf, html`
+          <label>Headline <input name="signinHeadline" value="${v('signinHeadline')}" maxlength="80"></label>
+          <label>Introduction <textarea name="signinIntro" rows="3" maxlength="300">${v('signinIntro')}</textarea></label>
+          <label class="switch-row">
+            <span><strong>Link to OpenProfiles on GitHub</strong><span class="hint">The footer link and the "host your own" suggestions</span></span>
+            <input type="checkbox" role="switch" name="selfHostLinks" value="1" ${v('selfHostLinks') ? 'checked' : ''}>
+          </label>
+        `, { hint: 'Emptying a field puts the original text back.' })}
+
+        ${settingsForm('announcement', 'Announcement', csrf, html`
+          <label>Shown at the top of every page, sign-in included. Leave it empty for none.
+            <textarea name="announcement" rows="2" maxlength="280">${v('announcement') ?? ''}</textarea></label>
+        `)}
+
+        ${settingsForm('stremio', 'In Stremio', csrf, html`
+          <div class="two-col">
+            <label>Add-on name <input name="addonName" value="${v('addonName')}" maxlength="40"></label>
+            <label>Row name <input name="catalogName" value="${v('catalogName')}" maxlength="40" data-row-name></label>
+          </div>
+          <label>Description, on the add-on's install page <textarea name="addonDescription" rows="2" maxlength="300">${v('addonDescription')}</textarea></label>
+          <div class="row-preview" aria-hidden="true">
+            <span><span data-row-name-out>${v('catalogName')}</span> - OpenProfiles</span>
+            <span class="row-preview-tiles"><span></span><span></span><span></span></span>
+          </div>
+        `, { hint: 'Installed copies pick these up at their next switch.' })}
+
+        ${settingsForm('about', 'About this server', csrf, html`
+          <div class="two-col">
+            ${field('operator', 'Run by', d.operator, html`<input id="set-operator" name="operator" value="${v('operator') ?? ''}" maxlength="80">`)}
+            <label>Contact (a web address or email) <input name="contact" value="${v('contact') ?? ''}" maxlength="200" placeholder="https://… or you@example.com" autocomplete="off"></label>
+          </div>
+          ${field('privacyNote', 'Privacy note', d.privacyNote, html`<textarea id="set-privacyNote" name="privacyNote" rows="2" maxlength="500">${v('privacyNote') ?? ''}</textarea>`)}
+        `, { hint: '"Run by" and the privacy note show when others can sign in. The contact is in every page\'s footer.' })}
+
+        ${settingsForm('log', 'Server log', csrf, html`
+          ${field('logLevel', 'What it writes', d.logLevel,
+            html`<select id="set-logLevel" name="logLevel">${LOG_LEVELS.map(([value, label]) => html`<option value="${value}" ${v('logLevel') === value ? 'selected' : ''}>${label}</option>`)}</select>`, { narrow: true })}
+        `)}
+
+        <section class="card fixed-card" aria-labelledby="fixed-title">
+          <h2 class="h3" id="fixed-title">Set in .env only</h2>
+          <dl class="stat-facts">
+            ${fixed.map(([label, value]) => html`<dt>${label}</dt><dd>${value}</dd>`)}
+          </dl>
+          <p class="hint">These decide where the server lives and what it trusts, so they can't be changed from a browser.</p>
+        </section>
+      </div>
+    </div>`,
+  });
+}
+
+/** What the server keeps, in plain words. Every line here must stay true to the code. */
+export function privacyPage({ site = DEFAULT_SITE } = {}) {
+  return layout({
+    site,
     title: 'What this server keeps',
     body: html`<section class="card narrow prose">
       <h1>What this server keeps</h1>
-      <p>OpenProfiles keeps what it needs to switch your profiles, and nothing else.${instance.shared && instance.operator ? ` This server is run by ${instance.operator}.` : ''}</p>
+      <p>${site.name} keeps what it needs to switch your profiles, and nothing else.${site.shared && site.operator ? ` This server is run by ${site.operator}.` : ''}${site.contact ? html` <a href="${contactHref(site.contact)}" rel="noopener">Contact</a>.` : ''}</p>
 
       <h2 class="h3">Kept, encrypted</h2>
       <ul>
@@ -979,27 +1305,28 @@ export function privacyPage({ instance = {} } = {}) {
         <li>The server log has no emails, IP addresses, add-on links or watch history: only events like "account 3 switched profiles", and errors.</li>
       </ul>
 
-      ${instance.privacyNote ? html`<h2 class="h3">This server</h2>
-      <p>${instance.privacyNote}</p>
+      ${site.privacyNote ? html`<h2 class="h3">This server</h2>
+      <p>${site.privacyNote}</p>
 
       ` : ''}<h2 class="h3">Who can read it</h2>
       <p>It's encrypted with this server's key, and whoever runs the server holds that key. Trust them as you would any service that has your add-on links, or run your own.</p>
 
       <h2 class="h3">Deleting it</h2>
-      <p>Account › Delete my OpenProfiles account removes everything from the live database at once. The server's nightly copies of its database still hold it until they expire, within about 5 weeks. Your Stremio account stays as it is.</p>
+      <p>Account › Delete my ${site.name} account removes everything from the live database at once. The server's nightly copies of its database still hold it until they expire, within about 5 weeks. Your Stremio account stays as it is.</p>
 
-      <h2 class="h3">Run your own</h2>
+      ${site.selfHostLinks ? html`<h2 class="h3">Run your own</h2>
       <p>OpenProfiles is free and open source. A server is one small Docker container: tens of MB of memory and a few MB of disk per account, so a free cloud tier or a Raspberry Pi is plenty. It needs an https address, because Stremio only installs add-ons over https.
-        <a href="${REPO_URL}" rel="noopener">Set it up from GitHub</a>.</p>
-      <p><a href="/">Back to OpenProfiles</a></p>
+        <a href="${REPO_URL}" rel="noopener">Set it up from GitHub</a>.</p>` : ''}
+      <p><a href="/">Back to ${site.name}</a></p>
     </section>`,
   });
 }
 
-export function errorPage({ status, message }) {
+export function errorPage({ site = DEFAULT_SITE, status, message }) {
   return layout({
+    site,
     title: status === 404 ? 'Not found' : 'Error',
     body: html`<section class="card narrow"><h1>${status === 404 ? 'Not found' : 'Something went wrong'}</h1>
-      <p>${message}</p><p><a href="/configure">Back to OpenProfiles</a></p></section>`,
+      <p>${message}</p><p><a href="/configure">Back to ${site.name}</a></p></section>`,
   });
 }

@@ -169,11 +169,14 @@ export function backgroundSvg({ name, colour, avatar = 'initial' }) {
   ].join(''));
 }
 
-/** Add-on logo: two people on the brand violet. */
-export function logoSvg() {
+export const BRAND_COLOUR = '#8b6dff';
+
+/** Add-on logo: two people on the brand colour (violet unless the owner picked another accent). */
+export function logoSvg(colour = BRAND_COLOUR) {
   const W = 256;
+  const fill = /^#[0-9a-f]{6}$/i.test(colour) ? colour : BRAND_COLOUR;
   return svgDoc(W, W, [
-    `<rect width="${W}" height="${W}" rx="56" fill="#8b6dff"/>`,
+    `<rect width="${W}" height="${W}" rx="56" fill="${fill}"/>`,
     // The header icon from the design, drawn on a 24 px grid and scaled up.
     '<g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" transform="translate(28 28) scale(8.33)">',
     '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3 3-4.6 5.5-4.6s4.7 1.6 5.5 4.6"/>',
@@ -181,7 +184,30 @@ export function logoSvg() {
   ].join(''));
 }
 
-export const renderLogo = () => png(logoSvg());
+export const renderLogo = (colour) => png(logoSvg(colour));
+
+export const LOGO_UPLOAD_MAX = 2 * 1024 * 1024;
+
+/**
+ * An uploaded logo, made safe to serve: decoded and drawn again as a fresh
+ * 256 px square PNG, so nothing of the original file (metadata, scripts in an
+ * SVG, a polyglot) survives. Only PNG, JPEG and WebP are read.
+ */
+export async function normaliseLogo(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > LOGO_UPLOAD_MAX) return null;
+  let meta;
+  try {
+    meta = await sharp(buffer, { limitInputPixels: 40_000_000 }).metadata();
+  } catch {
+    return null;
+  }
+  if (!['png', 'jpeg', 'webp'].includes(meta.format)) return null;
+  return sharp(buffer, { limitInputPixels: 40_000_000, pages: 1 })
+    .rotate()
+    .resize(256, 256, { fit: 'cover' })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+}
 export const renderPoster = (opts) => png(posterSvg(opts));
 export const renderBackground = (opts) => png(backgroundSvg(opts));
 

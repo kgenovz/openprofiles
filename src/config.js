@@ -52,7 +52,12 @@ export function loadConfig(env = process.env) {
 
   return {
     publicUrl,
+    // ACCESS, ALLOWED_ACCOUNTS, MAX_ACCOUNTS, LOG_LEVEL, OPERATOR and PRIVACY_NOTE are
+    // checked here so a typo stops the first boot, but the running server reads them
+    // through core/settings.js: the Server tab can override each one.
     access: { mode, allowed, maxAccounts },
+    // Who runs the server besides its owner (the first account), e.g. to hand it over.
+    admins: (env.ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean),
     // Ignored since sign-in moved to Stremio accounts; server.js warns if it's still set.
     legacyAdminPassword: Boolean(env.ADMIN_PASSWORD),
     port,

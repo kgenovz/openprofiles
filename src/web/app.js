@@ -1,15 +1,19 @@
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAddonRouter } from '../addon/routes.js';
-import { avatarTileSvg } from '../addon/art.js';
+import { LOGO_UPLOAD_MAX, avatarTileSvg, normaliseLogo } from '../addon/art.js';
 import { isValidAvatar } from '../addon/avatars.js';
 import { AVATAR_COLOURS, BIN_DAYS, DEFAULT_COLOUR, UserError, userMessageOf } from '../core/service.js';
+import { SECTIONS, Settings } from '../core/settings.js';
+import { serverStats } from '../core/stats.js';
 import { createAuth } from './auth.js';
+import { themeCss } from './theme.js';
 import {
-  accountPage, addonManagerPage, backupsPage, errorPage, installPage, managerAddonRow, privacyPage, profilesPage, restorePreviewPage,
-  signInPage, wizardAddonRow, wizardPage,
+  accountPage, addonManagerPage, adminPage, backupsPage, errorPage, installPage, managerAddonRow, privacyPage, profilesPage,
+  restorePreviewPage, signInPage, wizardAddonRow, wizardPage,
 } from './views.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -61,11 +65,24 @@ function renamesFromForm(body) {
   return renames;
 }
 
-export function createApp({ config, db, accounts, log }) {
+/**
+ * `settings` (core/settings.js) holds what the Server tab changes; the pages
+ * read it on every request, so a save shows at once.
+ */
+export function createApp({ config, db, accounts, log, settings = new Settings({ db }), startedAt = Date.now() }) {
   const app = express();
   const auth = createAuth({ db, config });
-  // A shared server (anyone, or a list, can sign in) says who runs it and what it keeps.
-  const instance = { shared: Boolean(config.access && config.access.mode !== 'owner'), operator: config.operator ?? null, privacyNote: config.privacyNote ?? null };
+  const themeVersion = () => crypto.createHash('sha1').update(themeCss(settings.branding())).digest('hex').slice(0, 10);
+  /**
+   * How the pages present this server, and whether the viewer runs it. A shared
+   * server (anyone, or a list, can sign in) also says who runs it and what it keeps.
+   */
+  const site = (req) => ({
+    ...settings.branding(),
+    themeVersion: themeVersion(),
+    shared: settings.get('access') !== 'owner',
+    admin: Boolean(req?.session && accounts.isAdmin(req.session.accountId)),
+  });
   app.set('trust proxy', config.trustProxy);
   app.disable('x-powered-by');
   app.use(securityHeaders);
@@ -106,7 +123,9 @@ export function createApp({ config, db, accounts, log }) {
   };
 
   app.get('/health', (req, res) => res.json({ ok: true }));
-  app.get('/privacy', (req, res) => sendPage(res, privacyPage({ instance })));
+  app.get('/privacy', (req, res) => sendPage(res, privacyPage({ site: site() })));
+  // The accent colour (the page's CSP allows no inline styles). Links carry ?v=, so it can cache.
+  app.get('/theme.css', (req, res) => res.set('Cache-Control', 'public, max-age=3600').type('css').send(themeCss(settings.branding())));
   app.get('/', auth.optional, (req, res) => res.redirect(303, req.session ? '/configure' : '/signin'));
 
   // Sign in with Stremio. The password goes to Stremio once and is never stored.
@@ -114,7 +133,7 @@ export function createApp({ config, db, accounts, log }) {
     const again = req.query.again === '1';
     if (req.session && !again) return res.redirect(303, '/configure');
     const notice = req.query.deleted === '1' ? 'Your OpenProfiles account and everything saved for it were deleted. Your Stremio account is as it was.' : null;
-    return sendPage(res, signInPage({ again, notice, instance }));
+    return sendPage(res, signInPage({ again, notice, site: site() }));
   });
   const ownOrigin = (() => {
     try {
@@ -127,7 +146,7 @@ export function createApp({ config, db, accounts, log }) {
     // A sign-in posted from another site would sign this browser into someone else's account.
     const origin = req.get('origin');
     if (req.get('sec-fetch-site') === 'cross-site' || (origin && origin !== ownOrigin && origin !== `${req.protocol}://${req.get('host')}`)) {
-      return sendPage(res, signInPage({ error: 'Sign in from this page.', instance }), 403);
+      return sendPage(res, signInPage({ error: 'Sign in from this page.', site: site() }), 403);
     }
     return next();
   }, async (req, res) => {
@@ -136,7 +155,7 @@ export function createApp({ config, db, accounts, log }) {
     const limited = auth.checkSignInLimits(req, email);
     if (limited) {
       log.warn('Sign-in rate-limited');
-      return sendPage(res, signInPage({ error: limited, email, instance }), 429);
+      return sendPage(res, signInPage({ error: limited, email, site: site() }), 429);
     }
     try {
       const { accountId, created, warnings } = await accounts.signIn(email, password);
@@ -147,12 +166,12 @@ export function createApp({ config, db, accounts, log }) {
       return res.redirect(303, '/configure');
     } catch (err) {
       if (!err.userMessage) log.error('Sign-in failed', { error: err.message });
-      return sendPage(res, signInPage({ error: userMessageOf(err), email, instance }), err.kind === 'auth' ? 401 : 400);
+      return sendPage(res, signInPage({ error: userMessageOf(err), email, site: site() }), err.kind === 'auth' ? 401 : 400);
     }
   });
 
   // Stremio-facing routes, guarded by each account's add-on token rather than a session.
-  app.use(createAddonRouter({ config, accounts, log }));
+  app.use(createAddonRouter({ config, accounts, log, settings }));
 
   const r = express.Router();
   r.use(auth.require, auth.csrf, (req, res, next) => {
@@ -174,8 +193,8 @@ export function createApp({ config, db, accounts, log }) {
     return next();
   };
 
-  const page = (req, extra = {}) => ({ csrf: req.session.csrf, account: req.service.status().account, flash: auth.takeFlash(req), ...extra });
-  const notFound = (res, message) => sendPage(res, errorPage({ status: 404, message }), 404);
+  const page = (req, extra = {}) => ({ site: site(req), csrf: req.session.csrf, account: req.service.status().account, flash: auth.takeFlash(req), ...extra });
+  const notFound = (res, message, req = null) => sendPage(res, errorPage({ site: site(req), status: 404, message }), 404);
   /** The Undo bar's edit, unless this browser hid the bar for it. */
   const undoFor = (req) => {
     const undo = req.service.latestUndo();
@@ -258,7 +277,7 @@ export function createApp({ config, db, accounts, log }) {
 
   r.get('/profiles/:id', (req, res) => {
     const id = idParam(req);
-    if (!req.service.repo.getProfile(id)) return notFound(res, 'That profile no longer exists.');
+    if (!req.service.repo.getProfile(id)) return notFound(res, 'That profile no longer exists.', req);
     const status = req.service.status();
     return sendPage(res, profilesPage({
       ...page(req), status, addon: req.service.addonInfo(), undo: undoFor(req), editing: req.service.profileDetails(id),
@@ -301,7 +320,7 @@ export function createApp({ config, db, accounts, log }) {
 
   r.get('/profiles/:id/addons', async (req, res) => {
     const id = idParam(req);
-    if (!req.service.repo.getProfile(id)) return notFound(res, 'That profile no longer exists.');
+    if (!req.service.repo.getProfile(id)) return notFound(res, 'That profile no longer exists.', req);
     try {
       const manager = await req.service.addonManager(id);
       return sendPage(res, addonManagerPage({ ...page(req), manager, undo: undoFor(req) }));
@@ -443,12 +462,13 @@ export function createApp({ config, db, accounts, log }) {
 
   r.get('/backups/:id/restore', (req, res) => {
     const backup = req.service.getBackup(idParam(req));
-    if (!backup) return notFound(res, 'That backup no longer exists.');
+    if (!backup) return notFound(res, 'That backup no longer exists.', req);
     const status = req.service.status();
     const active = status.profiles.find((p) => p.id === status.activeProfileId) || null;
     const backupOf = backup.profile_id != null && backup.profile_id !== status.activeProfileId ? req.service.repo.getProfile(backup.profile_id) : null;
     const addonsOnly = backup.kind === 'pre_change' && backup.profile_id != null && Boolean(req.service.repo.getProfile(backup.profile_id));
     return sendPage(res, restorePreviewPage({
+      site: site(req),
       csrf: req.session.csrf, backup, active, locked: Boolean(status.openJournal), account: status.account, backupOf, addonsOnly,
     }));
   });
@@ -511,7 +531,7 @@ export function createApp({ config, db, accounts, log }) {
     try {
       data = req.service.exportBackup(idParam(req));
     } catch (err) {
-      return notFound(res, userMessageOf(err));
+      return notFound(res, userMessageOf(err), req);
     }
     const stamp = data.created_at.slice(0, 10);
     res.set('Cache-Control', 'no-store');
@@ -578,16 +598,69 @@ export function createApp({ config, db, accounts, log }) {
     return sendSvg(res, avatarTileSvg({ name: String(name).slice(0, 40), colour, avatar, size: 128 }));
   });
 
+  // ── Server tab: only for whoever runs the server ───────────────────────────
+
+  // Everyone else gets the same "nothing here" as any unknown page.
+  const adminOnly = (req, res, next) => (accounts.isAdmin(req.session.accountId) ? next() : notFound(res, "There's nothing here.", req));
+
+  /** The facts that stay in the environment, as the Server tab shows them. */
+  const fixedFacts = () => [
+    ['Address', config.publicUrl],
+    ['Add-ons on private networks', config.allowPrivateAddons ? 'Allowed' : 'Not allowed'],
+    ['Trusted proxies', String(config.trustProxy ?? 'none')],
+    ['Encryption key', config.secretKey ? 'From SECRET_KEY' : 'secret.key in the data folder'],
+  ];
+
+  r.get('/admin', adminOnly, (req, res) => {
+    const described = Object.fromEntries(Object.values(SECTIONS).flat().map((key) => [key, settings.describe(key)]));
+    const stats = serverStats({ db, dataDir: config.dataDir ?? '.', settings, log, startedAt });
+    return sendPage(res, adminPage({ ...page(req), stats, settings: described, fixed: fixedFacts() }));
+  });
+
+  const SAVED = {
+    access: 'Saved who can sign in.', look: 'Saved the look.', signin: 'Saved the sign-in page.', announcement: 'Saved the announcement.',
+    stremio: 'Saved. Installed copies in Stremio pick it up at their next switch.', about: 'Saved.', log: 'Saved. The log changes from now on.',
+  };
+  r.post('/admin/settings/:section', adminOnly, action(async (req) => {
+    const section = String(req.params.section);
+    if (!Object.hasOwn(SECTIONS, section)) throw new UserError('SETTINGS', "That isn't a settings section.");
+    const changed = settings.saveSection(section, req.body);
+    return { text: changed.length ? SAVED[section] : 'Nothing to save: that is how it already was.' };
+  }, (req) => `/admin#${Object.hasOwn(SECTIONS, req.params.section) ? req.params.section : ''}`));
+
+  /** The section a setting is in, for going back to it. */
+  const sectionOf = (key) => Object.keys(SECTIONS).find((id) => SECTIONS[id].includes(key)) ?? '';
+  r.post('/admin/reset/:key', adminOnly, action(async (req) => {
+    const key = String(req.params.key);
+    if (!sectionOf(key)) throw new UserError('SETTINGS', "That isn't a setting.");
+    settings.reset(key);
+    return { text: 'Back to the value in .env.' };
+  }, (req) => `/admin#${sectionOf(String(req.params.key))}`));
+
+  // The page script uploads the picture as is; it's decoded and redrawn before it's kept.
+  r.post('/admin/logo', adminOnly, oneUpload, express.raw({ type: () => true, limit: LOGO_UPLOAD_MAX }), json(async (req) => {
+    const png = await normaliseLogo(req.body);
+    if (!png) throw new UserError('LOGO', "That picture couldn't be read. Use a PNG, JPG or WebP file under 2 MB.");
+    settings.setLogo(png);
+    auth.setFlash(req, { type: 'ok', text: 'New logo saved. Stremio shows it from the next switch.' });
+    return { ok: true };
+  }));
+
+  r.post('/admin/logo/remove', adminOnly, action(async () => {
+    settings.setLogo(null);
+    return { text: 'Back to the drawn logo.' };
+  }, '/admin#look'));
+
   app.use(r);
 
-  app.use((req, res) => sendPage(res, errorPage({ status: 404, message: "There's nothing here." }), 404));
+  app.use((req, res) => sendPage(res, errorPage({ site: site(), status: 404, message: "There's nothing here." }), 404));
   // Four parameters is how Express recognises an error handler.
   app.use((err, req, res, _next) => {
     // A body that won't parse: its error message quotes part of the body, so it stays out of the log.
     const parse = err.type === 'entity.parse.failed' || err.type === 'entity.too.large';
     log.error('Request failed', { path: logPath(req.path), ...(parse ? { error: err.type } : { error: err.message, stack: err.stack }) });
     const status = err.status && err.status < 500 ? err.status : 500;
-    sendPage(res, errorPage({ status, message: status === 500 ? 'The server log has details.' : 'That request was not valid.' }), status);
+    sendPage(res, errorPage({ site: site(), status, message: status === 500 ? 'The server log has details.' : 'That request was not valid.' }), status);
   });
 
   return app;

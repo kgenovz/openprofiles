@@ -101,7 +101,7 @@ describe('add-on routes', () => {
     await ctx.signIn();
     ctx.kids = await ctx.service.createProfile({ name: 'Kids', from: 'empty' });
     const config = { publicUrl: PUBLIC_URL, trustProxy: false };
-    server = createApp({ config, db: ctx.db, accounts: ctx.accounts, log: silentLogger }).listen(0);
+    server = createApp({ config, db: ctx.db, accounts: ctx.accounts, settings: ctx.settings, log: silentLogger }).listen(0);
     await new Promise((resolve) => server.once('listening', resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   });

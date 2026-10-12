@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { userMessageOf } from '../core/service.js';
-import { ArtCache, renderBackground, renderLogo, renderPoster } from './art.js';
+import { textOn } from '../web/theme.js';
+import { ArtCache, BRAND_COLOUR, renderBackground, renderLogo, renderPoster } from './art.js';
 import {
   CATALOG_ID, CATALOG_TYPE, buildManifest, parseProfileMetaId, profileMetaId,
 } from './manifest.js';
@@ -27,11 +28,11 @@ export function autoRefreshTarget(userAgent = '') {
 }
 
 /** What the browser tab shows for a moment during the hand-off. `target` is one of REDIRECT_TARGETS. */
-function handoffPage(target) {
+function handoffPage(target, colour = BRAND_COLOUR) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>OpenProfiles</title></head>
 <body style="margin:0;min-height:100vh;background:#0f0f14;display:grid;place-items:center">
-<a href="${target}" style="display:inline-block;padding:14px 28px;border-radius:12px;background:#8b6dff;color:#fff;font:700 17px system-ui,sans-serif;text-decoration:none">Back to Stremio</a>
+<a href="${target}" style="display:inline-block;padding:14px 28px;border-radius:12px;background:${colour};color:${textOn(colour)};font:700 17px system-ui,sans-serif;text-decoration:none">Back to Stremio</a>
 </body></html>`;
 }
 
@@ -46,7 +47,7 @@ function artVersion(...parts) {
  * The add-on Stremio talks to. Every route but the logo sits under
  * the secret token, because opening a profile's stream switches the account.
  */
-export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_MS }) {
+export function createAddonRouter({ config, accounts, log, settings, waitMs = SWITCH_WAIT_MS }) {
   const router = express.Router();
   const art = new ArtCache();
   const { publicUrl } = config;
@@ -134,16 +135,20 @@ export function createAddonRouter({ config, accounts, log, waitMs = SWITCH_WAIT_
       .set('Location', target)
       .set('Cache-Control', 'no-store')
       .type('html')
-      .send(handoffPage(target));
+      .send(handoffPage(target, settings.get('accent') ?? BRAND_COLOUR));
   });
 
+  // The owner's upload (already re-encoded), else the drawn logo in the accent colour.
+  // Links to it carry ?v=<version>, so a change shows despite the day of caching.
   router.get('/logo.png', async (req, res) => {
-    res.set('Cache-Control', 'public, max-age=86400').type('png').send(await art.get('logo', renderLogo));
+    const accent = settings.get('accent') ?? BRAND_COLOUR;
+    const png = settings.logo() ?? await art.get(`logo|${accent}`, () => renderLogo(accent));
+    res.set('Cache-Control', 'public, max-age=86400').type('png').send(png);
   });
 
   router.get('/:token/manifest.json', cors, withToken((req, res) => {
     noStore(res);
-    res.json(buildManifest({ publicUrl }));
+    res.json(buildManifest({ publicUrl }, settings.addon()));
   }));
 
   // Stremio's "Configure" button opens <transport base>/configure.
