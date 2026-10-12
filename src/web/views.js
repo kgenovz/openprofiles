@@ -871,7 +871,8 @@ export function installPage({ csrf, account, flash, addon }) {
         new link: the old one stops working, and if the add-on is installed, Stremio's copy is updated
         for you.</p>
       <div class="row align-end">
-        <label class="grow">Add-on link <input readonly value="${addon.manifestUrl}" class="mono"></label>
+        <label class="grow"><span>Add-on link <span class="copied-note" data-copied-note hidden>Copied</span></span>
+          <input readonly value="${addon.manifestUrl}" class="mono copy-field" data-copy-field title="Click to copy"></label>
         ${postButton({ action: '/addon/rotate', csrf, label: 'Get a new link', style: 'danger', confirm: 'Make a new add-on link? The current one stops working.' })}
       </div>
     </section>` : ''}`,

@@ -31,13 +31,46 @@ document.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-copy]');
   if (!button) return;
   const label = button.textContent;
+  let copied = false;
   try {
     await navigator.clipboard.writeText(button.dataset.copy);
-    button.textContent = button.dataset.copied || 'Copied';
+    copied = true;
   } catch {
-    button.textContent = 'Copy failed: select the link below';
+    // Some browsers refuse the clipboard API; copy through a hidden field instead.
+    const temp = Object.assign(document.createElement('textarea'), { value: button.dataset.copy });
+    temp.setAttribute('readonly', '');
+    temp.style.position = 'fixed';
+    temp.style.opacity = '0';
+    document.body.append(temp);
+    temp.select();
+    copied = document.execCommand('copy');
+    temp.remove();
+    button.focus();
   }
+  button.textContent = copied ? (button.dataset.copied || 'Copied') : 'Copy failed: select the link below';
   setTimeout(() => { button.textContent = label; }, 2000);
+});
+
+// Read-only link fields copy themselves when clicked (and stay selected, as a fallback).
+document.addEventListener('click', async (event) => {
+  const field = event.target.closest('input[data-copy-field]');
+  if (!field) return;
+  field.select();
+  const note = field.closest('label')?.querySelector('[data-copied-note]');
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(field.value);
+    copied = true;
+  } catch {
+    // Some browsers refuse the clipboard API; the older command still copies the selection.
+    field.select();
+    copied = document.execCommand('copy');
+  }
+  if (copied && note) {
+    note.hidden = false;
+    clearTimeout(note.timer);
+    note.timer = setTimeout(() => { note.hidden = true; }, 2000);
+  }
 });
 
 // Picture picker: tabs, Shuffle for generated faces, previews follow the chosen colour.
