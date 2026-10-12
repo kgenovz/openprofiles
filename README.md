@@ -125,6 +125,18 @@ that profile's add-on list, the same way Stremio stores it. Bringing a hidden ca
 fetches Cinemeta again; if Cinemeta can't be reached, nothing changes. **Reset to Stremio's
 default** puts the stock Cinemeta back.
 
+Keep Cinemeta in every profile, even one that gets its catalogs and details pages elsewhere
+(a ratings wrapper, TMDB, AIOMetadata). Stremio's Calendar and new-episode notifications only
+come from Cinemeta's own add-on (its "Calendar videos" and "Last videos" catalogs, which
+OpenProfiles never hides); a wrapped copy doesn't count. A profile without it gets a warning and
+an **Add Cinemeta** button, which adds it as a shell (rows, search and details off) when another
+add-on already provides those.
+
+Details pages come from the first add-on in the list that gives them. The **Metadata** card on a
+profile's add-on page shows which one that is and lets you pick another: it moves to the top,
+and Cinemeta's own details pages turn off (or back on, if you pick Cinemeta). Add-ons that use
+their own ids, like TMDB set to TMDB ids, can be picked for profiles that run on those ids alone.
+
 Editing the profile in use changes Stremio right away; editing any other profile changes only
 its saved copy, which Stremio gets when you switch to it. Either way a backup is taken first,
 and the page offers **Undo** for 24 hours. Undo puts back only the add-ons: anything watched

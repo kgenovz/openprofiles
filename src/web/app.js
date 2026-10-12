@@ -319,6 +319,16 @@ export function createApp({ config, db, accounts, log }) {
     };
   }, (req) => `/profiles/${idParam(req)}/addons#metadata`));
 
+  r.post('/profiles/:id/cinemeta/add', action(async (req) => {
+    const result = await req.service.addCinemeta(idParam(req), { base: String(req.body.base || '') });
+    if (!result.changed) return { text: `${result.profile.name} already has Cinemeta.` };
+    return {
+      text: result.shell
+        ? `Added Cinemeta to ${result.profile.name}${result.active ? ' and Stremio' : ''} for the Calendar and new-episode notifications only: its rows, search and details pages are off, so nothing shows twice.`
+        : `Added Cinemeta to ${result.profile.name}${result.active ? ' and Stremio' : ''}, at the bottom of the list. Calendar and new-episode notifications work again.`,
+    };
+  }, (req) => `/profiles/${idParam(req)}/addons#cinemeta-panel`));
+
   r.post('/profiles/:id/cinemeta/reset', action(async (req) => {
     const result = await req.service.resetCinemeta(idParam(req), { base: String(req.body.base || '') });
     return editResult(result, 'Cinemeta');

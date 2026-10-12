@@ -316,6 +316,37 @@ describe('Cinemeta control per profile', () => {
     assert.equal(manager.metadata.currentOwnIds, true);
   });
 
+  it('adds Cinemeta back to a profile without it: a shell next to a wrapper, the whole thing otherwise', async () => {
+    const { service, fake, saved } = await setup({ localFiles: false });
+    const wrapper = {
+      transportUrl: 'https://ratingswrapper.example/abc/manifest.json',
+      transportName: '',
+      manifest: { ...cinemetaManifest(), id: 'com.linvo.cinemeta.ratings-wrapper', name: 'Cinemeta with Ratings', resources: ['catalog', 'meta'] },
+      flags: {},
+    };
+    const debrid = fake.addons.find((a) => a.manifest.name === 'debrid');
+
+    fake.addons = [wrapper, debrid];
+    const withWrapper = await service.createProfile({ name: 'Wrapper only', from: 'empty' });
+    let manager = await service.addonManager(withWrapper.id);
+    assert.equal(manager.cinemeta.present, false, "a wrapper isn't Cinemeta's own add-on");
+    const shell = await service.addCinemeta(withWrapper.id, { base: manager.base });
+    assert.equal(shell.shell, true);
+    const added = saved(withWrapper.id).addons.at(-1).manifest;
+    assert.equal(added.id, 'com.linvo.cinemeta');
+    assert.deepEqual(deriveSettings(added), { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true });
+    assert.deepEqual(added.catalogs.map((c) => c.id), ['last-videos', 'calendar-videos'], 'only the Calendar and new-episode catalogs');
+    manager = await service.addonManager(withWrapper.id);
+    assert.equal((await service.addCinemeta(withWrapper.id, { base: manager.base })).changed, false, 'already there');
+
+    fake.addons = [debrid];
+    const bare = await service.createProfile({ name: 'Streams only', from: 'empty' });
+    manager = await service.addonManager(bare.id);
+    const whole = await service.addCinemeta(bare.id, { base: manager.base });
+    assert.equal(whole.shell, false);
+    assert.deepEqual(saved(bare.id).addons.at(-1).manifest, cinemetaManifest());
+  });
+
   it('reset puts the stock manifest back exactly', async () => {
     const { service, kids, saved } = await setup();
     let editor = await service.editableAddons(kids.id);

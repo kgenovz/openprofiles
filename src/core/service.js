@@ -5,7 +5,7 @@ import {
   runsOnDevice,
 } from './addons.js';
 import {
-  CINEMETA_ID, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
+  CINEMETA_ID, STOCK_URL as CINEMETA_STOCK_URL, STOCK_SETTINGS, anotherAddonServesMeta, buildManifest, deriveSettings, describeChanges, findCinemeta,
   detailsSource, givesOwnDetailsOnly, givesTitleDetails, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
 } from './cinemeta.js';
 import { sealExport, openExport } from './exporter.js';
@@ -511,6 +511,35 @@ export class ProfilesService {
       },
     });
     return { ...result, sourceName };
+  }
+
+  /**
+   * Put Cinemeta into a profile that has none. Stremio's Calendar and
+   * new-episode notifications only come from the `calendar-videos` and
+   * `last-videos` catalogs of the add-on with Cinemeta's own id, so a profile
+   * without it loses both, even with a wrapped copy (a ratings wrapper) in
+   * it. It goes at the bottom; when another add-on already gives details
+   * pages (a wrapper, TMDB…), it goes in as a shell: rows, search and details
+   * off, so only those two catalogs are left and nothing shows twice.
+   */
+  async addCinemeta(profileId, { base }) {
+    let shell = false;
+    const result = await this.editAddons(profileId, {
+      base,
+      editKind: 'addons',
+      label: (p) => `Before adding Cinemeta to ${p.name}`,
+      change: async (current, profile) => {
+        if (findCinemeta(current).index !== -1) return { addons: current, activity: '' };
+        const stock = await this.fetchStockCinemeta({ transportUrl: CINEMETA_STOCK_URL });
+        shell = current.some((a) => !isSelfAddon(a) && (givesTitleDetails(a) || givesOwnDetailsOnly(a)));
+        const manifest = shell
+          ? buildManifest({ current: stock, settings: { hidePopular: true, hideNew: true, hideFeatured: true, removeSearch: true, removeMeta: true } })
+          : stock;
+        const addons = [...current, { transportUrl: CINEMETA_STOCK_URL, transportName: '', manifest, flags: { official: true, protected: true } }];
+        return { addons, activity: `Added Cinemeta to ${profile.name}${shell ? ' (for the Calendar and new-episode notifications only)' : ''}` };
+      },
+    });
+    return { ...result, shell };
   }
 
   /** Put Cinemeta back exactly as Stremio ships it. Refuses if the stock copy can't be fetched. */

@@ -21,6 +21,7 @@
 
 export const CINEMETA_ID = 'com.linvo.cinemeta';
 const STOCK_HOST = 'v3-cinemeta.strem.io';
+export const STOCK_URL = `https://${STOCK_HOST}/manifest.json`;
 const POPULAR = 'top';
 const NEW = 'year';
 const FEATURED = 'imdbRating';

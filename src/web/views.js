@@ -30,7 +30,10 @@ const BACKUP_GROUPS = [
   { title: 'Setup', keep: 'kept forever', kinds: ['original'] },
 ];
 
-const COLOUR_NAMES = ['Red', 'Orange', 'Amber', 'Green', 'Teal', 'Blue', 'Purple', 'Pink'];
+const NO_CINEMETA_EFFECT =
+  "Stremio's Calendar and new-episode notifications only come from Cinemeta, so they won't work without it.";
+
+const COLOUR_NAMES =['Red', 'Orange', 'Amber', 'Green', 'Teal', 'Blue', 'Purple', 'Pink'];
 
 const CINEMETA_SWITCHES = [
   ['popular', 'hidePopular', 'Popular', 'Popular movies and series, on Home and in Discover'],
@@ -324,6 +327,7 @@ function profileEditor(d, { csrf, locked }) {
       <div class="editor-section" id="cinemeta">
         <div class="section-head"><h2>Cinemeta</h2>${d.cinemeta?.present ? html`<a href="/profiles/${p.id}/addons#cinemeta-panel">Change</a>` : ''}</div>
         <p class="hint">${d.cinemeta?.present ? describeSettings(d.cinemeta.settings) : `${p.name} doesn't have Cinemeta, Stremio's built-in catalogs.`}</p>
+        ${d.cinemeta && !d.cinemeta.present ? html`<div class="warn">${icon.alert}<span>${NO_CINEMETA_EFFECT}${d.cinemeta.wrapped ? ` ${d.cinemeta.wrappedName} doesn't count: Stremio looks for Cinemeta's own add-on.` : ''} <a href="/profiles/${p.id}/addons#cinemeta-panel">Add it back</a>.</span></div>` : ''}
         ${d.cinemeta?.wrapped ? html`<p class="hint">${p.name} also has ${d.cinemeta.wrappedName}, which shows its own copy of Cinemeta's catalogs.</p>` : ''}
       </div>
 
@@ -513,7 +517,7 @@ export function wizardPage({ csrf, account, options, error = null, values = {} }
       <section class="wizard-step" data-step="4" aria-label="Cinemeta">
         <h2 class="step-title" tabindex="-1">4. Cinemeta</h2>
         <p>Cinemeta is Stremio's built-in catalog add-on. Pick which of its catalogs this profile sees on Home and in Discover.</p>
-        <p class="hint" data-cm-none ${start.cinemeta.present ? 'hidden' : ''}>This profile won't have Cinemeta, so there's nothing to set here.</p>
+        <div class="warn" data-cm-none ${start.cinemeta.present ? 'hidden' : ''}>${icon.alert}<span>This profile won't have Cinemeta, so there's nothing to set here. ${NO_CINEMETA_EFFECT} Tick Cinemeta in the add-ons step to keep them; you can hide all its rows here.</span></div>
         <div class="switches" data-cm-switches ${start.cinemeta.present ? '' : 'hidden'}>${cinemetaSwitches('cm_', cm)}</div>
         <div class="warn" data-meta-warning hidden>${icon.alert}<span>Details pages are off and none of the ticked add-ons provide them. Titles will open without descriptions or episode lists.</span></div>
         ${wrapperWarning({ name: 'another add-on', profile: 'This profile', hidden: true, action: html`<button type="button" class="link" data-cm-to-wrapper>Turn Cinemeta's own catalogs off and let it show them</button>` })}
@@ -670,11 +674,15 @@ export function addonManagerPage({ csrf, account, flash, manager, undo }) {
             hidden: cinemeta.settings.hidePopular && cinemeta.settings.hideNew && cinemeta.settings.hideFeatured,
             action: html`<button type="submit" name="handoff" value="${cinemeta.wrappedRef}" class="link">Let ${cinemeta.wrappedName} show them instead</button>`,
           }) : ''}
+          <p class="hint">Its Calendar and Last videos catalogs always stay: Stremio's Calendar and new-episode notifications only come from them, so they're never hidden.</p>
           <div class="row spread">
             <button type="submit" formaction="/profiles/${p.id}/cinemeta/reset" data-confirm-click="Put Cinemeta back exactly as Stremio ships it?">Reset to Stremio's default</button>
             <button type="submit" class="primary">Save</button>
           </div>`
-        : html`<p class="hint">${p.name} doesn't have Cinemeta${cinemeta.wrapped ? ' (only a copy wrapped by another add-on, which these settings can\'t change)' : ''}.</p>`}
+        : html`<p class="hint">${p.name} doesn't have Cinemeta${cinemeta.wrapped ? ' (only a copy wrapped by another add-on, which these settings can\'t change)' : ''}.</p>
+          <div class="warn">${icon.alert}<span class="stack-sm"><span>${NO_CINEMETA_EFFECT}${cinemeta.wrapped ? ` ${cinemeta.wrappedName} doesn't count: Stremio looks for Cinemeta's own add-on.` : ''}</span>
+            <button type="submit" formaction="/profiles/${p.id}/cinemeta/add" class="link">Add Cinemeta</button></span></div>
+          <p class="hint">It goes at the bottom of the list. If another add-on already gives details pages, it's added as a shell (rows, search and details off) so only the Calendar and new-episode catalogs are used.</p>`}
       </form>
       </div>
     </div>`,
