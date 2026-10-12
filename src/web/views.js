@@ -30,7 +30,7 @@ const ADMIN_TAB = ['server', 'Server', '/admin'];
 export const DEFAULT_SITE = {
   name: 'OpenProfiles', accent: null, appearance: 'auto', customLogo: false, logoVersion: null, themeVersion: null,
   headline: DEFAULT_HEADLINE, intro: DEFAULT_INTRO, selfHostLinks: true, announcement: null, contact: null,
-  operator: null, privacyNote: null, shared: false, admin: false,
+  operator: null, privacyNote: null, shared: false, admin: false, removeUnusedDays: 0,
 };
 
 /** A contact the owner gave: an https link or an email address. */
@@ -1078,6 +1078,7 @@ function overview(stats) {
         <li>${a.newThisWeek} new this week</li>
         <li>${a.usedThisWeek} used in the last 7 days</li>
         <li>${a.installed} with the add-on installed</li>
+        ${a.removeAfterDays ? html`<li>Removed after ${a.removeAfterDays} days unused</li>` : ''}
       </ul>
       ${full ? pill('bad', "Full: nobody new can sign in") : a.unused ? pill('warn', `${a.unused} unused for ${a.unusedDays} days`) : ''}
     </div>
@@ -1099,7 +1100,8 @@ function overview(stats) {
       <span class="stat-big stat-text"><strong>${ranOn ? `Ran ${ranOn}` : 'Not run yet'}</strong></span>
       <ul class="stat-lines">
         ${d.summary ? html`<li>${d.summary.backedUp} backed up · ${d.summary.skipped} unchanged</li>
-          <li>${d.summary.failed} failed${d.summary.purged ? ` · ${plural(d.summary.purged, 'profile')} emptied from bins` : ''}</li>` : html`<li>They run once a day, starting a few minutes after the server does.</li>`}
+          <li>${d.summary.failed} failed${d.summary.purged ? ` · ${plural(d.summary.purged, 'profile')} emptied from bins` : ''}</li>
+          ${d.summary.removed ? html`<li>${plural(d.summary.removed, 'unused account')} removed</li>` : ''}` : html`<li>They run once a day, starting a few minutes after the server does.</li>`}
         ${d.snapshots ? html`<li>Database copies: ${d.snapshots.daily} daily, ${d.snapshots.weekly} weekly</li>` : ''}
       </ul>
       ${d.late ? pill('warn', 'Late') : d.summary?.failed ? pill('warn', `${d.summary.failed} failed`) : d.summary ? pill('ok', 'On schedule') : ''}
@@ -1202,8 +1204,11 @@ export function adminPage({ site, csrf, account, flash, stats, settings: d, fixe
           ${d.access.source !== 'default' ? html`<p class="label-row">${origin(d.access, 'access')}</p>` : ''}
           <div data-access-for="list">${field('allowedAccounts', 'Stremio emails or user ids, one per line', d.allowedAccounts,
             html`<textarea id="set-allowedAccounts" name="allowedAccounts" rows="4" autocomplete="off" spellcheck="false">${v('allowedAccounts').join('\n')}</textarea>`)}</div>
-          <div data-access-for="open">${field('maxAccounts', 'Most accounts', d.maxAccounts,
-            html`<input id="set-maxAccounts" type="number" name="maxAccounts" min="1" max="100000" step="1" value="${v('maxAccounts') ?? ''}" placeholder="No limit">`, { narrow: true })}</div>
+          <div data-access-for="open" class="stack">${field('maxAccounts', 'Most accounts', d.maxAccounts,
+            html`<input id="set-maxAccounts" type="number" name="maxAccounts" min="1" max="100000" step="1" value="${v('maxAccounts') ?? ''}" placeholder="No limit">`, { narrow: true })}
+            ${field('removeUnusedDays', 'Remove accounts unused for (days)', d.removeUnusedDays,
+            html`<input id="set-removeUnusedDays" type="number" name="removeUnusedDays" min="0" max="3650" step="1" value="${v('removeUnusedDays')}" aria-describedby="unused-hint">`, { narrow: true })}
+            <p class="hint" id="unused-hint">Unused: no sign-in, no visit here and nothing from Stremio. 0 keeps them. Yours is never removed.</p></div>
         `, { hint: 'You can always sign in, whatever the rule. Accounts already here keep working when the limit drops.' })}
 
         ${settingsForm('look', 'Look', csrf, html`
@@ -1333,7 +1338,7 @@ export function privacyPage({ site = DEFAULT_SITE } = {}) {
       <p>It's encrypted with this server's key, and whoever runs the server holds that key. Trust them as you would any service that has your add-on links, or run your own.</p>
 
       <h2 class="h3">Deleting it</h2>
-      <p>Account › Delete my ${site.name} account removes everything from the live database at once. The server's nightly copies of its database still hold it until they expire, within about 5 weeks. Your Stremio account stays as it is.</p>
+      <p>Account › Delete my ${site.name} account removes everything from the live database at once.${site.removeUnusedDays ? ` An account nobody uses for ${site.removeUnusedDays} days (no sign-in, no visit here, and no use from Stremio) is removed the same way, to free its place.` : ''} The server's nightly copies of its database still hold it until they expire, within about 5 weeks. Your Stremio account stays as it is.</p>
 
       ${site.selfHostLinks ? html`<h2 class="h3">Run your own</h2>
       <p>OpenProfiles is free and open source. A server is one small Docker container: tens of MB of memory and a few MB of disk per account, so a free cloud tier or a Raspberry Pi is plenty. It needs an https address, because Stremio only installs add-ons over https.

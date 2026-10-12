@@ -211,7 +211,7 @@ describe('add-on routes', () => {
   it('a slow switch answers "still switching" and finishes in the background', async () => {
     let finish;
     const slowService = { repo: ctx.repo, switchTo: () => new Promise((resolve) => { finish = resolve; }) };
-    const slowAccounts = { byAddonToken: (t) => (t === token ? { account: {}, service: slowService } : null) };
+    const slowAccounts = { byAddonToken: (t) => (t === token ? { account: {}, service: slowService } : null), noteAddonUse: () => {} };
     const app = express().use(createAddonRouter({ config: { publicUrl: PUBLIC_URL }, accounts: slowAccounts, log: silentLogger, waitMs: 20 }));
     const slow = app.listen(0);
     await new Promise((resolve) => slow.once('listening', resolve));

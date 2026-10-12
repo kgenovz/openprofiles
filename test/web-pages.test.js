@@ -146,6 +146,7 @@ describe('web pages', () => {
       const text = await privacy.text();
       assert.match(text, /Not your password/);
       assert.match(text, /The web proxy keeps no access logs/);
+      assert.match(text, /An account nobody uses for 90 days/);
     } finally {
       shared.close();
     }

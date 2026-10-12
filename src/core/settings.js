@@ -66,6 +66,17 @@ const FIELDS = {
       return Number.isInteger(n) && n > 0 && n <= 100000 ? n : invalid('The account limit must be a whole number above 0, or empty for no limit.');
     },
   },
+  // With ACCESS=open: remove accounts nobody has used for this many days. 0: never.
+  removeUnusedDays: {
+    env: 'REMOVE_UNUSED_DAYS',
+    def: 90,
+    parse: (raw) => {
+      const s = String(raw ?? '').trim();
+      const n = s ? Number(s) : 0;
+      if (n === 0 || (Number.isInteger(n) && n >= 30 && n <= 3650)) return n;
+      return invalid('Days unused must be 0 (never) or a whole number from 30 to 3650.');
+    },
+  },
   logLevel: { env: 'LOG_LEVEL', def: 'info', parse: oneOf(['error', 'warn', 'info', 'debug'], 'The log level') },
   operator: { env: 'OPERATOR', def: null, parse: line(80, '"Run by"') },
   privacyNote: { env: 'PRIVACY_NOTE', def: null, parse: line(500, 'The privacy note') },
@@ -106,7 +117,7 @@ const FIELDS = {
 
 /** Which settings each Server tab form saves. Ticked-or-not boxes are absent when off. */
 export const SECTIONS = {
-  access: ['access', 'allowedAccounts', 'maxAccounts'],
+  access: ['access', 'allowedAccounts', 'maxAccounts', 'removeUnusedDays'],
   look: ['serverName', 'accent', 'appearance'],
   signin: ['signinHeadline', 'signinIntro', 'selfHostLinks'],
   announcement: ['announcement'],

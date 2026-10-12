@@ -83,6 +83,7 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     ...settings.branding(),
     themeVersion: themeVersion(),
     shared: settings.get('access') !== 'owner',
+    removeUnusedDays: settings.get('access') === 'open' ? settings.get('removeUnusedDays') : 0,
     admin: Boolean(req?.session && accounts.isAdmin(req.session.accountId)),
   });
   app.set('trust proxy', config.trustProxy);

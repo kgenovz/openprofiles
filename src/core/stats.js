@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { USED_SINCE } from './repo.js';
 import { SNAPSHOT_RE } from './scheduler.js';
 
 const { version } = createRequire(import.meta.url)('../../package.json');
@@ -26,21 +27,19 @@ export function serverStats({ db, dataDir, settings, log, startedAt, now = Date.
   const one = (sql, ...args) => db.prepare(sql).get(...args).n;
   const weekAgo = now - 7 * DAY_MS;
 
-  // "Used": signed in, seen on the page, or did anything (a switch from Stremio counts) in the window.
-  const usedSince = `(a.last_login_at > @since
-    OR EXISTS (SELECT 1 FROM activity WHERE account_id = a.id AND at > @since)
-    OR EXISTS (SELECT 1 FROM sessions WHERE account_id = a.id AND last_seen_at > @since))`;
   const access = settings.access();
   const accounts = {
     total: one('SELECT COUNT(*) AS n FROM accounts'),
     mode: access.mode,
     limit: access.mode === 'open' && Number.isFinite(access.maxAccounts) ? access.maxAccounts : null,
     newThisWeek: one('SELECT COUNT(*) AS n FROM accounts WHERE created_at > ?', weekAgo),
-    usedThisWeek: db.prepare(`SELECT COUNT(*) AS n FROM accounts a WHERE ${usedSince}`).get({ since: weekAgo }).n,
+    usedThisWeek: db.prepare(`SELECT COUNT(*) AS n FROM accounts a WHERE ${USED_SINCE}`).get({ since: weekAgo }).n,
     installed: one('SELECT COUNT(*) AS n FROM accounts WHERE addon_installed = 1'),
-    unused: db.prepare(`SELECT COUNT(*) AS n FROM accounts a WHERE a.created_at <= @since AND NOT ${usedSince}`)
+    unused: db.prepare(`SELECT COUNT(*) AS n FROM accounts a WHERE a.created_at <= @since AND NOT ${USED_SINCE}`)
       .get({ since: now - UNUSED_DAYS * DAY_MS }).n,
     unusedDays: UNUSED_DAYS,
+    // Shared servers remove accounts left unused this long (null: never).
+    removeAfterDays: access.mode === 'open' ? settings.get('removeUnusedDays') || null : null,
   };
 
   const perDay = [];

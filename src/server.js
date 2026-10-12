@@ -67,7 +67,7 @@ function main() {
   if (open) log.warn('Some earlier switches did not finish; each account sees a recovery prompt on its page', { open });
   log.info('Access rule', { mode: settings.access().mode, accounts: accounts.accounts.count() });
 
-  const scheduler = startScheduler({ db, dataDir: config.dataDir, accounts, log });
+  const scheduler = startScheduler({ db, dataDir: config.dataDir, accounts, settings, log });
 
   const app = createApp({ config, db, accounts, log, settings });
   const server = app.listen(config.port, () => {

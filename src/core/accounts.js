@@ -147,12 +147,32 @@ export class AccountsService {
    * Remove an account and everything stored for it. Waits for its running
    * operation to finish first. The Stremio account itself is left as it is.
    */
-  async deleteAccount(accountId) {
+  async deleteAccount(accountId, { reason = null } = {}) {
     const service = this.forAccount(accountId);
     await service.lock.run(async () => {
       this.accounts.delete(accountId);
     });
     this.services.delete(accountId);
-    this.log.info('Account deleted', { accountId });
+    this.log.info('Account deleted', { accountId, ...(reason ? { reason } : {}) });
+  }
+
+  /** Stremio asked this account's add-on for something: it counts as used. */
+  noteAddonUse(accountId) {
+    this.accounts.touchAddon(accountId);
+  }
+
+  /**
+   * Remove the accounts nobody has used since `since` (see USED_SINCE in repo.js),
+   * never the owner or ADMINS. Each is checked again right before it goes, in
+   * case it was used meanwhile. Returns how many were removed.
+   */
+  async removeUnused(since) {
+    let removed = 0;
+    for (const id of this.accounts.unusedSince(since)) {
+      if (this.isAdmin(id) || !this.accounts.unusedSince(since).includes(id)) continue;
+      await this.deleteAccount(id, { reason: 'unused' });
+      removed++;
+    }
+    return removed;
   }
 }

@@ -38,16 +38,26 @@ export function snapshotDatabase(db, dataDir, now = Date.now()) {
 }
 
 /**
- * The once-a-day jobs: database snapshot, each account's automatic backup
- * (skipped when nothing changed) and emptying bins of profiles deleted more
- * than BIN_DAYS ago. One account's failure doesn't stop the others.
+ * The once-a-day jobs: database snapshot, removing accounts nobody has used
+ * for removeUnusedDays (shared servers with ACCESS=open only), each account's
+ * automatic backup (skipped when nothing changed) and emptying bins of
+ * profiles deleted more than BIN_DAYS ago. One account's failure doesn't stop
+ * the others.
  */
-export async function runDaily({ db, dataDir, accounts, log = silentLogger, now = () => Date.now(), pause = () => new Promise((r) => setTimeout(r, 2000)) }) {
-  const summary = { snapshot: null, backedUp: 0, skipped: 0, failed: 0, purged: 0 };
+export async function runDaily({ db, dataDir, accounts, settings = null, log = silentLogger, now = () => Date.now(), pause = () => new Promise((r) => setTimeout(r, 2000)) }) {
+  const summary = { snapshot: null, removed: 0, backedUp: 0, skipped: 0, failed: 0, purged: 0 };
   try {
     summary.snapshot = snapshotDatabase(db, dataDir, now());
   } catch (err) {
     log.error('Database snapshot failed', { error: err.message });
+  }
+  const days = settings && settings.get('access') === 'open' ? settings.get('removeUnusedDays') : 0;
+  if (days > 0) {
+    try {
+      summary.removed = await accounts.removeUnused(now() - days * DAY_MS);
+    } catch (err) {
+      log.error('Removing unused accounts failed', { error: err.message });
+    }
   }
   const ids = db.prepare('SELECT id FROM accounts ORDER BY id').all().map((r) => r.id);
   for (const [i, id] of ids.entries()) {
@@ -76,7 +86,7 @@ export async function runDaily({ db, dataDir, accounts, log = silentLogger, now 
 }
 
 /** Runs the daily jobs once per UTC day: shortly after boot if due, then checks hourly. */
-export function startScheduler({ db, dataDir, accounts, log = silentLogger }) {
+export function startScheduler({ db, dataDir, accounts, settings = null, log = silentLogger }) {
   let running = false;
   const tick = async () => {
     if (running) return;
@@ -84,7 +94,7 @@ export function startScheduler({ db, dataDir, accounts, log = silentLogger }) {
     if (last === dayOf(Date.now())) return;
     running = true;
     try {
-      await runDaily({ db, dataDir, accounts, log });
+      await runDaily({ db, dataDir, accounts, settings, log });
     } catch (err) {
       log.error('Daily jobs failed', { error: err.message });
     } finally {

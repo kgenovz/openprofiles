@@ -74,6 +74,7 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
   const withToken = (handler) => async (req, res) => {
     const hit = accounts.byAddonToken(req.params.token);
     if (!hit) return res.status(404).json({ err: 'Not found' });
+    accounts.noteAddonUse(hit.account.id);
     return handler(req, res, hit.service.repo.getState(), hit.service);
   };
 

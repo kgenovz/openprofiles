@@ -260,6 +260,15 @@ const MIGRATIONS = [
   ALTER TABLE profiles ADD COLUMN photo_enc BLOB;
   ALTER TABLE profiles ADD COLUMN photo_hash TEXT;
   `,
+  // Unused accounts (v1, 2026-10-12).
+  //   accounts.last_addon_at  when Stremio last asked this account's add-on for anything (written
+  //                           at most hourly), so an account used only from Stremio counts as used.
+  //                           Accounts already here start from now: nobody is removed for the time
+  //                           before this was recorded.
+  `
+  ALTER TABLE accounts ADD COLUMN last_addon_at INTEGER;
+  UPDATE accounts SET last_addon_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

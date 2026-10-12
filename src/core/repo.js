@@ -21,6 +21,17 @@ const ACTIVITY_KEEP = 200;
 export function snapshotHash({ library, addons, notifs }) {
   return crypto.createHash('sha256').update(JSON.stringify([library, addons, notifs ?? null])).digest('hex');
 }
+/**
+ * "Used since @since", for an account row `a`: signed in, seen on the pages, did anything
+ * (a switch from Stremio counts), or Stremio asked its add-on for something. One rule for the
+ * Server tab's counts and for removing unused accounts.
+ */
+export const USED_SINCE = `(a.last_login_at > @since
+    OR COALESCE(a.last_addon_at, 0) > @since
+    OR EXISTS (SELECT 1 FROM activity WHERE account_id = a.id AND at > @since)
+    OR EXISTS (SELECT 1 FROM sessions WHERE account_id = a.id AND last_seen_at > @since))`;
+const ADDON_TOUCH_MS = 60 * 60 * 1000;
+
 const ACCOUNT_COLUMNS = `id, stremio_user_id, stremio_email, auth_key_enc, addon_token, active_profile_id,
   addon_installed, enc_version, created_at, last_login_at, created_at AS linked_at`;
 
@@ -386,6 +397,19 @@ export class Accounts {
     this.db.prepare('UPDATE accounts SET auth_key_enc = ? WHERE id = ?')
       .run(accountCipher(this.cipher, id).encryptJson(authKey, 'authkey'), id);
     return id;
+  }
+
+  /** Stremio used this account's add-on. Writes at most once an hour. */
+  touchAddon(id) {
+    const now = this.now();
+    this.db.prepare('UPDATE accounts SET last_addon_at = ? WHERE id = ? AND (last_addon_at IS NULL OR last_addon_at < ?)')
+      .run(now, id, now - ADDON_TOUCH_MS);
+  }
+
+  /** Accounts set up before `since` and not used since (see USED_SINCE). */
+  unusedSince(since) {
+    return this.db.prepare(`SELECT a.id FROM accounts a WHERE a.created_at <= @since AND NOT ${USED_SINCE} ORDER BY a.id`)
+      .all({ since }).map((r) => r.id);
   }
 
   /** Everything for the account goes with it (foreign keys cascade). */

@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
+import express from 'express';
 import { normaliseLogo } from '../src/addon/art.js';
+import { createAddonRouter } from '../src/addon/routes.js';
 import { accessDecision } from '../src/core/accounts.js';
+import { runDaily } from '../src/core/scheduler.js';
 import { Settings } from '../src/core/settings.js';
 import { serverStats } from '../src/core/stats.js';
 import { migrate } from '../src/db.js';
@@ -159,6 +165,72 @@ describe('who runs the server', () => {
     }
     migrate(db);
     assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'owner_account_id'").get().value, '2');
+  });
+});
+
+describe('unused accounts', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const daily = (ctx) => runDaily({
+    db: ctx.db, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'op-unused-')), accounts: ctx.accounts,
+    settings: ctx.settings, now: () => ctx.accounts.now(), pause: async () => {},
+  });
+  const ids = (ctx) => ctx.db.prepare('SELECT id FROM accounts ORDER BY id').all().map((r) => r.id);
+
+  async function fourAccounts(opts = {}) {
+    const ctx = makeService({ fake: fakeFleet(person(1), person(2), person(3), person(4)), access: { mode: 'open' }, admins: ['person4@example.com'], ...opts });
+    const signed = [];
+    for (const n of [1, 2, 3, 4]) signed.push((await ctx.accounts.signIn(`person${n}@example.com`, 'hunter22')).accountId);
+    return { ctx, signed };
+  }
+
+  it('on an open server, removes accounts unused for 90 days, never the owner or ADMINS', async () => {
+    const { ctx, signed: [owner, fromStremio, idle, admin] } = await fourAccounts();
+    ctx.advance(91 * DAY);
+    // Only used from Stremio: its add-on was asked for the Switch profile row.
+    const app = express().use(createAddonRouter({ config: { publicUrl: 'https://profiles.example.com' }, accounts: ctx.accounts, settings: ctx.settings, log: silentLogger }));
+    const server = app.listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const token = ctx.accounts.getAccount(fromStremio).addon_token;
+      assert.equal((await fetch(`http://127.0.0.1:${server.address().port}/${token}/manifest.json`)).status, 200);
+    } finally {
+      server.close();
+    }
+
+    const summary = await daily(ctx);
+    assert.equal(summary.removed, 1);
+    assert.deepEqual(ids(ctx), [owner, fromStremio, admin], `account ${idle} removed`);
+  });
+
+  it('keeps everyone with another sign-in rule, or with the setting at 0', async () => {
+    const list = await fourAccounts();
+    list.ctx.settings.saveSection('access', { access: 'list', allowedAccounts: 'person2@example.com', removeUnusedDays: '90' });
+    list.ctx.advance(200 * DAY);
+    assert.equal((await daily(list.ctx)).removed, 0);
+    assert.equal(ids(list.ctx).length, 4);
+
+    const never = await fourAccounts({ env: { REMOVE_UNUSED_DAYS: '0' } });
+    never.ctx.advance(200 * DAY);
+    assert.equal((await daily(never.ctx)).removed, 0);
+    assert.equal(ids(never.ctx).length, 4);
+  });
+
+  it('takes 0, or 30 days and up', () => {
+    const settings = new Settings({ db: memoryDb() });
+    assert.equal(settings.get('removeUnusedDays'), 90);
+    assert.throws(() => settings.saveSection('access', { access: 'open', removeUnusedDays: '7' }), /0 \(never\) or a whole number from 30/);
+    settings.saveSection('access', { access: 'open', removeUnusedDays: '180' });
+    assert.equal(settings.get('removeUnusedDays'), 180);
+  });
+
+  it('accounts from before this was recorded start counting from the upgrade', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    migrate(db, { upTo: 8 });
+    db.prepare(`INSERT INTO accounts (id, stremio_user_id, stremio_email, auth_key_enc, addon_token, created_at, last_login_at)
+      VALUES (1, 'u1', 'p1@example.com', x'00', 'token-1-xxxxxxxxxxxxxxxx', 1, 1)`).run();
+    migrate(db);
+    assert.ok(db.prepare('SELECT last_addon_at FROM accounts').get().last_addon_at > Date.now() - 60_000);
   });
 });
 
