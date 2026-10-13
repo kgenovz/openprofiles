@@ -372,7 +372,9 @@ export class AccountRepo {
     const insert = this.db.prepare(`INSERT INTO carryovers
       (account_id, owner_profile_id, item_enc, created_at, changed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`);
     for (const r of records) {
-      const enc = this.cipher.encryptJson({ base: r.base, written: r.written, seenMtime: r.seenMtime ?? null }, 'carryover');
+      const enc = this.cipher.encryptJson({
+        base: r.base, written: r.written, seenMtime: r.seenMtime ?? null, putMtime: r.putMtime ?? null,
+      }, 'carryover');
       insert.run(this.accountId, r.ownerProfileId, enc, r.createdAt, r.changedAt ?? null, r.expiresAt);
     }
   }

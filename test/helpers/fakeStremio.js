@@ -14,6 +14,9 @@ export class FakeStremio {
     this.addons = [];
     this.calls = [];
     this.rules = [];
+    // Like the real datastorePut: a write older (by `_mtime`) than the stored copy is ignored.
+    // Off by default, since most tests don't care.
+    this.newestWins = false;
     this.fetch = this.fetch.bind(this);
   }
 
@@ -106,7 +109,11 @@ export class FakeStremio {
         }
       }
     }
-    for (const item of body.changes) store.set(item._id, structuredClone(item));
+    for (const item of body.changes) {
+      const cur = store.get(item._id);
+      if (this.newestWins && cur && Date.parse(item._mtime) < Date.parse(cur._mtime)) continue;
+      store.set(item._id, structuredClone(item));
+    }
     return json({ result: { success: true } });
   }
 

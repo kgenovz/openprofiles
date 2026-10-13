@@ -9,6 +9,12 @@
  * watched right before it: each record names the profile that owns the title
  * (`base`, its copy at the switch) and what the switch wrote for it
  * (`written`). Every later read of the account sorts out what happened since.
+ *
+ * When unsure, the title stays with the profile in use: a later save counts
+ * as the owner's only on strong evidence (see judge and carriesOn), and
+ * anything else is left exactly as it would be without any of this. Getting
+ * it wrong the other way puts back, and so erases, someone's own viewing;
+ * this way the worst case is the owner missing some progress.
  */
 import { hasId } from './library.js';
 
@@ -24,6 +30,11 @@ export const RESUME_MS = 2 * 60 * 60 * 1000;
 export const MAX_MS = 12 * 60 * 60 * 1000;
 // Seeking back a little after the switch still counts as carrying on.
 const REWIND_SLACK_MS = 2 * 60 * 1000;
+// A position this far past the time since the switch proves playback began before it: playing at
+// normal speed can't run ahead of the clock, so someone starting the title after the switch never
+// is. The margin covers a device clock a few seconds behind the server's. It must stay under 15 s:
+// a live test saw a title started 16 s before a switch save 89 s in, 74 s after the switch.
+const BEFORE_SWITCH_MARGIN_MS = 10 * 1000;
 
 export const timeOf = (value) => {
   const t = Date.parse(value ?? '');
@@ -56,30 +67,56 @@ function videoOrder(videoId, itemId) {
   return parts.every((p) => /^\d+$/.test(p)) ? parts.map(Number) : null;
 }
 
-function later(a, b) {
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const d = (a[i] ?? 0) - (b[i] ?? 0);
-    if (d) return d > 0;
-  }
-  return false;
+/**
+ * The episode straight after: the next one in the season, or the first of the
+ * next season (autoplay, or "next" on close). Never a jump, never specials
+ * (season 0). Ids with only an episode number (kitsu) just count up by one.
+ */
+function isNextVideo(from, to) {
+  if (from.length !== to.length) return false;
+  if (from.length === 1) return to[0] === from[0] + 1;
+  if (from.length !== 2 || from[0] === 0 || to[0] === 0) return false;
+  return (to[0] === from[0] && to[1] === from[1] + 1) || (to[0] === from[0] + 1 && to[1] === 1);
 }
 
 /**
- * The owner's playback carried on: the same video further along (the player
- * only moves the position forward) or finished, or a later episode (autoplay,
- * or "next" on close). Someone in the new profile starting the title begins
- * from zero, since the switch hid it with no progress.
+ * The owner's playback carried on (`since`: when the title was first followed):
+ *   - the next episode (isNextVideo);
+ *   - the same video, the owner part-way (REWIND_SLACK_MS or more) at the
+ *     switch: at least that far along, give or take a little rewind. Someone
+ *     in the new profile starts from zero, since the switch hid it with no
+ *     progress;
+ *   - the same video, the owner barely started (or just finished, back at 0)
+ *     at the switch: further along, or finished, sooner than could have been
+ *     played since the switch, so it was already playing before it. A fresh
+ *     start after the switch never is.
  */
-export function carriesOn(base, live) {
+export function carriesOn(base, live, since) {
   const b = base.state || {};
   const l = live.state || {};
   if (!b.video_id || !l.video_id) return false;
-  if (l.video_id === b.video_id) {
-    return (l.timeOffset ?? 0) + REWIND_SLACK_MS >= (b.timeOffset ?? 0) || (l.timeOffset === 0 && l.flaggedWatched > 0);
+  if (l.video_id !== b.video_id) {
+    const bo = videoOrder(b.video_id, base._id);
+    const lo = videoOrder(l.video_id, base._id);
+    return Boolean(bo && lo && isNextVideo(bo, lo));
   }
-  const bo = videoOrder(b.video_id, base._id);
-  const lo = videoOrder(l.video_id, base._id);
-  return Boolean(bo && lo && later(lo, bo));
+  const offset = l.timeOffset ?? 0;
+  const finished = offset === 0 && l.flaggedWatched > 0;
+  if (!finished && (b.timeOffset ?? 0) >= REWIND_SLACK_MS) return offset + REWIND_SLACK_MS >= b.timeOffset;
+  const reached = finished ? (l.duration || b.duration || 0) : offset;
+  const at = timeOf(l.lastWatched);
+  return at >= since && reached > at - since + BEFORE_SWITCH_MARGIN_MS;
+}
+
+/**
+ * The copy the switch wrote has a history of its own: the profile switched to
+ * had watched the title, so a save may just as well be that profile resuming.
+ * Such a title is never taken from it.
+ */
+export function hasOwnProgress(item) {
+  const s = item?.state || {};
+  return Boolean(s.video_id || s.watched)
+    || ['timeOffset', 'timeWatched', 'flaggedWatched', 'timesWatched', 'overallTimeWatched'].some((k) => s[k] > 0);
 }
 
 /**
@@ -116,14 +153,18 @@ export function mergeProgress(base, live, written) {
 
 /**
  * What a fresh read says about a followed title (`live`: its row now, or undefined):
- *   untouched  Stremio still has what the switch wrote
- *   owner      the owner's playback carried on; `item` is the owner's copy with that progress
- *   released   someone in the profile in use played it, so it's theirs now
+ *   untouched  Stremio still has what the switch wrote, or what a put-back
+ *              wrote whose answer was lost (`putMtime`)
+ *   owner      the owner's playback carried on (carriesOn) over a copy the
+ *              switch wrote with no progress of its own; `item` is the
+ *              owner's copy with that progress
+ *   released   anything else: the profile in use keeps it, and it isn't followed any more
  */
 export function judge(record, live) {
-  if (!live) return { kind: 'released' };
-  if (timeOf(live._mtime) <= timeOf(record.written._mtime)) return { kind: 'untouched' };
-  if (!carriesOn(record.base, live)) return { kind: 'released' };
+  if (!live || hasOwnProgress(record.written)) return { kind: 'released' };
+  const at = timeOf(live._mtime);
+  if (at <= timeOf(record.written._mtime) || (record.putMtime && at === timeOf(record.putMtime))) return { kind: 'untouched' };
+  if (!carriesOn(record.base, live, record.createdAt)) return { kind: 'released' };
   return { kind: 'owner', item: mergeProgress(record.base, live, record.written) };
 }
 

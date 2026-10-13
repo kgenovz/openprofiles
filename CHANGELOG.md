@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Watching on another device during a switch:** a title goes back to the profile that was
+  watching only when it clearly kept playing there; when in doubt, the profile in use keeps it, so
+  its own viewing is never taken away or erased.
 - **Backups page:** each group shows its newest 5, with the rest under "Show older".
 
 ## 1.1.0 (2026-10-12)
