@@ -15,7 +15,7 @@ export const BACKUP_RETENTION = {
 // Never the passcode hash itself: only whether there is one.
 const PROFILE_META = `id, name, avatar_preset, avatar_colour, library_count, addon_count, notif_count,
   snapshot_taken_at, stremio_user_id, created_at, photo_hash, passcode_hash IS NOT NULL AS has_passcode`;
-const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at, profile_id, edit_kind`;
+const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at, profile_id, edit_kind, held_profile_id`;
 const ACTIVITY_KEEP = 200;
 
 /** Stable fingerprint of a snapshot's content, to tell whether anything changed since a backup. */
@@ -267,12 +267,14 @@ export class AccountRepo {
     const enc = this.encodeSnapshot(snapshot);
     const now = this.now();
     const at = Number.isFinite(createdAt) && createdAt > 0 ? Math.min(createdAt, now) : now;
+    // Whose state it is: the edited profile for an edit, else the one in use now; an import's is unknown.
+    const held = kind === 'imported' ? null : profileId ?? this.getState()?.active_profile_id ?? null;
     const info = this.db.prepare(`INSERT INTO backups
       (account_id, kind, label, library_enc, addons_enc, notifs_enc, library_count, addon_count, notif_count,
-       stremio_user_id, created_at, content_hash, profile_id, edit_kind)
+       stremio_user_id, created_at, content_hash, profile_id, edit_kind, held_profile_id)
       VALUES (@accountId, @kind, @label, @library_enc, @addons_enc, @notifs_enc, @library_count, @addon_count,
-       @notif_count, @stremioUserId, @now, @contentHash, @profileId, @editKind)`)
-      .run({ accountId: this.accountId, kind, label, stremioUserId, now: at, contentHash: snapshotHash(snapshot), profileId, editKind, ...enc });
+       @notif_count, @stremioUserId, @now, @contentHash, @profileId, @editKind, @held)`)
+      .run({ accountId: this.accountId, kind, label, stremioUserId, now: at, contentHash: snapshotHash(snapshot), profileId, editKind, held, ...enc });
     return Number(info.lastInsertRowid);
   }
 

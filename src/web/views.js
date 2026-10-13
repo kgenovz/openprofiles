@@ -494,13 +494,13 @@ export function profilesPage({ site, csrf, flash, status, addon, undo, editing =
  * the profile's tile. A profile with no passcode (`locked` false; it was removed
  * meanwhile) just gets a Switch button.
  */
-export function passcodePage({ site, account = null, csrf = null, nonce = null, profile, picture, action, error = null, locked = true, cancel = null }) {
+export function passcodePage({ site, account = null, csrf = null, nonce = null, profile, picture, action, error = null, locked = true, cancel = null, title = null, tab = null }) {
   return layout({
     site,
-    title: `Switch to ${profile.name}`,
+    title: title ?? `Switch to ${profile.name}`,
     account,
     csrf,
-    tab: csrf ? 'profiles' : null,
+    tab: tab ?? (csrf ? 'profiles' : null),
     body: html`<section class="card narrow unlock">
       <img class="unlock-pic" src="${picture}" alt="" width="96" height="96">
       <h1 class="h2">${locked ? html`${icon.lock}${profile.name} is locked` : profile.name}</h1>
@@ -956,7 +956,15 @@ export function backupsPage({ site, csrf, account, flash, backups, bin = [], und
  * restoring then only changes its saved copy. `addonsOnly`: the backup can put
  * back just its add-on list (an edit's backup whose profile still exists).
  */
-export function restorePreviewPage({ site, csrf, backup, active, locked, account, backupOf = null, addonsOnly = false }) {
+export function restorePreviewPage({ site, csrf, backup, active, locked, account, backupOf = null, addonsOnly = false, codeFor = null, error = null }) {
+  // A backup of a locked profile (not the one in use) asks for its passcode, as switching to it would.
+  const restoreAll = codeFor
+    ? html`<form method="post" action="/backups/${backup.id}/restore" class="row align-end">
+        ${csrfField(csrf)}
+        <label>${codeFor.name}'s passcode ${codeInput('passcode')}</label>
+        <button type="submit" class="${addonsOnly ? '' : 'primary'}">${addonsOnly ? 'Restore all of it' : 'Restore'}</button>
+      </form>`
+    : postButton({ action: `/backups/${backup.id}/restore`, csrf, label: addonsOnly ? 'Restore all of it' : 'Restore', style: addonsOnly ? '' : 'primary' });
   return layout({
     site,
     title: 'Restore backup',
@@ -977,9 +985,10 @@ export function restorePreviewPage({ site, csrf, backup, active, locked, account
         : html`Restoring all of it replaces the Stremio account's library, add-ons and notifications, and <strong>${active?.name ?? 'the active profile'}</strong> is saved that way.`}
         A backup is taken first, so you can undo this.</p>
       ${locked ? html`<div class="flash flash-error">${icon.alert}<p>Resolve the unfinished switch first.</p></div>` : ''}
+      ${error ? html`<div class="flash flash-error" role="alert">${icon.alert}<p>${error}</p></div>` : ''}
       <div class="row">
         ${locked ? '' : addonsOnly ? postButton({ action: `/backups/${backup.id}/restore-addons`, csrf, label: 'Put back only the add-ons', style: 'primary' }) : ''}
-        ${locked ? '' : postButton({ action: `/backups/${backup.id}/restore`, csrf, label: addonsOnly ? 'Restore all of it' : 'Restore', style: addonsOnly ? '' : 'primary' })}
+        ${locked ? '' : restoreAll}
         <a class="button" href="/backups">Cancel</a>
       </div>
     </section>`,

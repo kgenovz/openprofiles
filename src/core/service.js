@@ -1505,13 +1505,35 @@ export class ProfilesService {
     return id;
   }
 
+  /**
+   * The locked profile a backup holds (`held_profile_id`), unless it's the one
+   * in use: restoring or downloading that backup asks for its code, as
+   * switching to it would. Null when it asks for nothing.
+   */
+  lockedHolder(backup) {
+    const id = backup?.held_profile_id;
+    if (id == null || id === this.repo.getState()?.active_profile_id) return null;
+    const p = this.repo.getProfile(id);
+    return p?.has_passcode ? p : null;
+  }
+
+  /** For a download: the code of the locked profile the backup holds, if any (counts like any try). */
+  checkBackupPasscode(backupId, passcode = null) {
+    return this.lock.run(async () => {
+      const holder = this.lockedHolder(this.repo.getBackup(backupId));
+      if (holder) await this.verifyPasscode(holder, passcode);
+    });
+  }
+
   /** Write a backup to the account and make it the active profile's saved state. */
-  restoreBackup(backupId) {
+  restoreBackup(backupId, { passcode = null } = {}) {
     return this.lock.run(async () => {
       const account = this.requireAccount();
       this.assertNoOpenJournal();
       const row = this.repo.getBackupRow(backupId);
       if (!row) throw new UserError('NOT_FOUND', 'That backup no longer exists.');
+      const holder = this.lockedHolder(row);
+      if (holder) await this.verifyPasscode(holder, passcode);
       const activeId = this.repo.getState()?.active_profile_id;
       const active = activeId != null ? this.repo.getProfile(activeId) : null;
       if (!active) throw new UserError('NO_ACTIVE', 'No profile is active.');

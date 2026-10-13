@@ -287,6 +287,9 @@ then goes back to Stremio), and **Refresh**.
   profile row or the OpenProfiles web page, then press **Refresh** on the TV.
 - An unlock is good for one switch: switching away and back asks again. Switching away from a
   locked profile never asks.
+- Restoring or downloading a backup of a locked profile asks for its code too (unless that
+  profile is in use). Backups from before passcodes existed don't always know whose they are;
+  those don't ask.
 - Changing or removing a passcode needs the current one. Forgot it? Signing in again with the
   Stremio password lets you set a new one without it, for 10 minutes.
 - After 5 wrong codes in a row (counted per account, on every page), codes are refused for 15

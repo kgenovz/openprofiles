@@ -6,8 +6,9 @@
   to it asks for the code on the web page; in Stremio its tile shows a padlock, and opening it
   offers **Unlock** (a page in the browser that switches, then goes back to Stremio) and
   **Refresh**. Changing or removing a code needs the current one, or a fresh sign-in with the
-  Stremio password. 5 wrong codes in a row wait 15 minutes. "Download everything" keeps the lock.
-  The database gains a column (applied on start).
+  Stremio password. 5 wrong codes in a row wait 15 minutes. Restoring or downloading a backup of
+  a locked profile asks for its code too. "Download everything" keeps the lock. The database gains
+  two columns (applied on start).
 
 ## 1.1.1 (2026-10-13)
 

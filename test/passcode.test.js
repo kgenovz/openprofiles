@@ -89,6 +89,33 @@ describe('passcodes in the service', () => {
     assert.ok(ctx.repo.listActivity(10).some((a) => /wrong passcodes in a row/.test(a.detail)));
   });
 
+  it("a locked profile's backups ask for its code to restore or download; the profile in use's don't", async () => {
+    const { service, repo, kids, original } = await linkedWithKids();
+    await service.switchTo(kids.id);
+    const kidsBackup = (await service.createBackup('Kids now')).id;
+    await service.switchTo(original.id);
+    const preSwitch = repo.listBackups().find((b) => b.kind === 'pre_switch' && b.label.includes('from "Kids"'));
+    assert.equal(repo.getBackup(kidsBackup).held_profile_id, kids.id);
+    assert.equal(preSwitch.held_profile_id, kids.id, "a before-switch backup holds the profile it left");
+    await service.setPasscode(kids.id, { code: '4821' });
+
+    await assert.rejects(service.restoreBackup(kidsBackup), refusedWith('PASSCODE_NEEDED'));
+    await assert.rejects(service.restoreBackup(kidsBackup, { passcode: '0000' }), refusedWith('WRONG_PASSCODE'));
+    await assert.rejects(service.checkBackupPasscode(kidsBackup), refusedWith('PASSCODE_NEEDED'));
+    await service.checkBackupPasscode(kidsBackup, '4821');
+    await service.restoreBackup(kidsBackup, { passcode: '4821' });
+
+    const mine = (await service.createBackup('Original now')).id;
+    await service.checkBackupPasscode(mine);
+    await service.restoreBackup(mine);
+  });
+
+  it('backups from before this was recorded hold the profile where it can be told', async () => {
+    const { db } = await linkedWithKids();
+    const rows = db.prepare('SELECT kind, held_profile_id FROM backups').all();
+    assert.ok(rows.filter((r) => r.kind === 'original').every((r) => r.held_profile_id != null), 'the setup backup is Original\'s');
+  });
+
   it('"Download everything" carries the hash, and bringing it back keeps the lock', async () => {
     const { service, repo, kids } = await linkedWithKids();
     await service.setPasscode(kids.id, { code: '4821' });
@@ -268,6 +295,29 @@ describe('passcodes over HTTP', () => {
     await b.post(`/profiles/${ctx.original.id}/switch`);
     assert.equal(active(), ctx.original.id);
     assert.equal((await b.post(`/profiles/${ctx.kids.id}/switch`)).location, `/profiles/${ctx.kids.id}/unlock`, 'asks again');
+  });
+
+  it("restoring or downloading a locked profile's backup asks for its code on the page", async () => {
+    ctx.repo.setPasscodeHash(ctx.kids.id, null);
+    await ctx.service.switchTo(ctx.kids.id);
+    const id = (await ctx.service.createBackup('Kids for the web')).id;
+    await ctx.service.switchTo(ctx.original.id);
+    ctx.repo.setPasscodeHash(ctx.kids.id, await hashPasscode('4821'));
+    const b = new Browser(base);
+    await b.signIn();
+
+    assert.match((await b.request(`/backups/${id}/restore`)).text, /Kids's passcode/);
+    const refused = await b.post(`/backups/${id}/restore`, { passcode: '0000' });
+    assert.equal(refused.status, 403);
+    assert.match(refused.text, /isn&#39;t right/);
+    assert.equal((await b.post(`/backups/${id}/restore`, { passcode: '4821' })).status, 303);
+
+    const ask = await b.request(`/backups/${id}/download`);
+    assert.match(ask.text, /Kids is locked/);
+    assert.doesNotMatch(String(ask.headers?.['content-disposition'] ?? ''), /attachment/);
+    const file = await b.post(`/backups/${id}/download`, { passcode: '4821' });
+    assert.equal(file.status, 200);
+    assert.match(file.text, /"format":"openprofiles-backup"/);
   });
 
   it('the editor changes or removes a passcode only with the current one, unless just signed in', async () => {

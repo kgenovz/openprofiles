@@ -306,6 +306,16 @@ const MIGRATIONS = [
   `
   ALTER TABLE profiles ADD COLUMN passcode_hash TEXT;
   `,
+  // Whose state each backup holds (2026-10-13), so a locked profile's backups ask for its code.
+  //   backups.held_profile_id  the profile in use when it was taken, or the edited one for an
+  //                            edit; NULL for imports. Older backups get it where it can be told:
+  //                            edits, and before-switch ones (the profile their switch left).
+  `
+  ALTER TABLE backups ADD COLUMN held_profile_id INTEGER REFERENCES profiles (id) ON DELETE SET NULL;
+  UPDATE backups SET held_profile_id = profile_id WHERE kind = 'pre_change';
+  UPDATE backups SET held_profile_id = (SELECT j.from_profile_id FROM switch_journal j
+    WHERE j.rollback_backup_id = backups.id AND j.kind = 'switch' LIMIT 1) WHERE kind = 'pre_switch';
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

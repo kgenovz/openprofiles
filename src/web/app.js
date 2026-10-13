@@ -555,9 +555,8 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
       : { text: 'Imported as a backup. Restore it from the list to load it into Stremio.' };
   }, '/backups'));
 
-  r.get('/backups/:id/restore', (req, res) => {
-    const backup = req.service.getBackup(idParam(req));
-    if (!backup) return notFound(res, 'That backup no longer exists.', req);
+  /** A backup's restore preview; a backup of a locked profile asks for its passcode there. */
+  const sendRestorePreview = (req, res, backup, error = null, code = 200) => {
     const status = req.service.status();
     const active = status.profiles.find((p) => p.id === status.activeProfileId) || null;
     const backupOf = backup.profile_id != null && backup.profile_id !== status.activeProfileId ? req.service.repo.getProfile(backup.profile_id) : null;
@@ -565,14 +564,32 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     return sendPage(res, restorePreviewPage({
       site: site(req),
       csrf: req.session.csrf, backup, active, locked: Boolean(status.openJournal), account: status.account, backupOf, addonsOnly,
-    }));
+      codeFor: req.service.lockedHolder(backup), error,
+    }), code);
+  };
+
+  r.get('/backups/:id/restore', (req, res) => {
+    const backup = req.service.getBackup(idParam(req));
+    if (!backup) return notFound(res, 'That backup no longer exists.', req);
+    return sendRestorePreview(req, res, backup);
   });
 
-  r.post('/backups/:id/restore', action(async (req) => {
-    const result = await req.service.restoreBackup(idParam(req));
-    if (result.profileOnly) return { text: "Put back. Only that profile's saved copy changed; Stremio didn't.", redirect: '/backups' };
-    return { text: 'Backup restored. Click back into Stremio and it refreshes (Stremio 5). Other apps: close and reopen them.', details: result.warnings };
-  }));
+  r.post('/backups/:id/restore', async (req, res) => {
+    const id = idParam(req);
+    try {
+      const result = await req.service.restoreBackup(id, { passcode: typeof req.body.passcode === 'string' ? req.body.passcode : null });
+      auth.setFlash(req, result.profileOnly
+        ? { type: 'ok', text: "Put back. Only that profile's saved copy changed; Stremio didn't." }
+        : { type: 'ok', text: 'Backup restored. Click back into Stremio and it refreshes (Stremio 5). Other apps: close and reopen them.', details: result.warnings });
+      return res.redirect(303, result.profileOnly ? '/backups' : '/configure');
+    } catch (err) {
+      const backup = Object.hasOwn(PASSCODE_REFUSALS, err.code) ? req.service.getBackup(id) : null;
+      if (backup) return sendRestorePreview(req, res, backup, err.userMessage, PASSCODE_REFUSALS[err.code]);
+      if (!err.userMessage) log.error('Unexpected error', { path: logPath(req.path), error: err.message, stack: err.stack });
+      auth.setFlash(req, { type: 'error', text: userMessageOf(err) });
+      return res.redirect(303, '/configure');
+    }
+  });
 
   r.post('/backups/:id/restore-addons', action(async (req) => {
     const result = await req.service.restoreAddonsFromBackup(idParam(req));
@@ -621,7 +638,7 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     return { text: 'Backup deleted.' };
   }, '/backups'));
 
-  r.get('/backups/:id/download', (req, res) => {
+  const sendBackupFile = (req, res) => {
     let data;
     try {
       data = req.service.exportBackup(idParam(req));
@@ -632,6 +649,28 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     res.set('Cache-Control', 'no-store');
     res.attachment(`openprofiles-backup-${stamp}-${idParam(req)}.json`);
     return res.json(data);
+  };
+
+  /** A backup of a locked profile asks for its passcode before the download (POSTed back here). */
+  const sendDownloadCode = (req, res, holder, error = null, code = 200) => sendPage(res, passcodePage({
+    ...page(req), profile: holder, picture: avatarUrl(holder), action: `/backups/${idParam(req)}/download`, error,
+    cancel: '/backups', title: 'Download backup', tab: 'backups',
+  }), code);
+
+  r.get('/backups/:id/download', (req, res) => {
+    const holder = req.service.lockedHolder(req.service.getBackup(idParam(req)));
+    return holder ? sendDownloadCode(req, res, holder) : sendBackupFile(req, res);
+  });
+
+  r.post('/backups/:id/download', async (req, res) => {
+    try {
+      await req.service.checkBackupPasscode(idParam(req), typeof req.body.passcode === 'string' ? req.body.passcode : null);
+    } catch (err) {
+      const holder = req.service.lockedHolder(req.service.getBackup(idParam(req)));
+      if (holder && Object.hasOwn(PASSCODE_REFUSALS, err.code)) return sendDownloadCode(req, res, holder, err.userMessage, PASSCODE_REFUSALS[err.code]);
+      throw err;
+    }
+    return sendBackupFile(req, res);
   });
 
   // ── Install tab ────────────────────────────────────────────────────────────
