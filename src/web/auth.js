@@ -4,6 +4,7 @@ const COOKIE = 'op_session';
 const UNDO_HIDDEN_COOKIE = 'op_undo_hidden';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TOUCH_EVERY_MS = 5 * 60 * 1000;
+const SEEN_EVERY_MS = 60 * 60 * 1000;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_PER_IP = 10;
 const MAX_ATTEMPTS_PER_EMAIL = 5;
@@ -83,6 +84,9 @@ export function createAuth({ db, config, now = () => Date.now() }) {
       VALUES (?, ?, ?, ?, ?, ?, ?)`),
     get: db.prepare('SELECT * FROM sessions WHERE id_hash = ? AND expires_at > ?'),
     touch: db.prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?'),
+    // On the account too, at most hourly: its sessions can expire or be signed out, and
+    // "unused" (core/repo.js USED_SINCE) must still see the visit.
+    seen: db.prepare('UPDATE accounts SET last_seen_at = @now WHERE id = @id AND (last_seen_at IS NULL OR last_seen_at < @now - @every)'),
     remove: db.prepare('DELETE FROM sessions WHERE id_hash = ?'),
     removeForAccount: db.prepare('DELETE FROM sessions WHERE account_id = ? AND hex(id_hash) = ?'),
     removeOthers: db.prepare('DELETE FROM sessions WHERE account_id = ? AND id_hash != ?'),
@@ -105,7 +109,10 @@ export function createAuth({ db, config, now = () => Date.now() }) {
     const row = q.get.get(sha256(token), now());
     if (!row) return null;
     // Idle expiry: each visit (at most every few minutes) pushes it out again.
-    if (now() - row.last_seen_at > TOUCH_EVERY_MS) q.touch.run(now(), now() + SESSION_TTL_MS, row.id_hash);
+    if (now() - row.last_seen_at > TOUCH_EVERY_MS) {
+      q.touch.run(now(), now() + SESSION_TTL_MS, row.id_hash);
+      q.seen.run({ now: now(), id: row.account_id, every: SEEN_EVERY_MS });
+    }
     return { idHash: row.id_hash, accountId: row.account_id, csrf: row.csrf, flash: row.flash };
   }
 
@@ -127,6 +134,7 @@ export function createAuth({ db, config, now = () => Date.now() }) {
       const ua = String(req.get('user-agent') || '').slice(0, 300);
       const idHash = sha256(token);
       q.insert.run(idHash, accountId, randomToken(24), ua, now(), now(), now() + SESSION_TTL_MS);
+      q.seen.run({ now: now(), id: accountId, every: 0 });
       if (flash) q.setFlash.run(JSON.stringify(flash), idHash);
       res.setHeader('Set-Cookie', cookie(token, SESSION_TTL_MS));
     },

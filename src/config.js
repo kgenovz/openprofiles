@@ -39,8 +39,15 @@ export function loadConfig(env = process.env) {
   if (!ACCESS_MODES.has(mode)) problems.push(`ACCESS must be one of: ${[...ACCESS_MODES].join(', ')}`);
   const allowed = (env.ALLOWED_ACCOUNTS || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (mode === 'list' && allowed.length === 0) problems.push('ACCESS=list needs ALLOWED_ACCOUNTS (Stremio emails or user ids, comma-separated)');
-  const maxAccounts = env.MAX_ACCOUNTS ? Number(env.MAX_ACCOUNTS) : Infinity;
-  if (!(maxAccounts > 0)) problems.push('MAX_ACCOUNTS must be a positive number');
+  // The same ranges the Server tab takes (core/settings.js): a value it can't read would be ignored.
+  const maxAccounts = env.MAX_ACCOUNTS?.trim() ? Number(env.MAX_ACCOUNTS) : Infinity;
+  if (!(maxAccounts === Infinity || (Number.isInteger(maxAccounts) && maxAccounts > 0 && maxAccounts <= 100000))) {
+    problems.push('MAX_ACCOUNTS must be a whole number from 1 to 100000');
+  }
+  const removeUnusedDays = env.REMOVE_UNUSED_DAYS?.trim() ? Number(env.REMOVE_UNUSED_DAYS) : 90;
+  if (!(removeUnusedDays === 0 || (Number.isInteger(removeUnusedDays) && removeUnusedDays >= 30 && removeUnusedDays <= 3650))) {
+    problems.push('REMOVE_UNUSED_DAYS must be 0 (never remove) or a whole number of days from 30 to 3650');
+  }
 
   const port = env.PORT ? Number(env.PORT) : 7000;
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('PORT must be a port number');
@@ -52,7 +59,7 @@ export function loadConfig(env = process.env) {
 
   return {
     publicUrl,
-    // ACCESS, ALLOWED_ACCOUNTS, MAX_ACCOUNTS, LOG_LEVEL, OPERATOR and PRIVACY_NOTE are
+    // ACCESS, ALLOWED_ACCOUNTS, MAX_ACCOUNTS, REMOVE_UNUSED_DAYS, LOG_LEVEL, OPERATOR and PRIVACY_NOTE are
     // checked here so a typo stops the first boot, but the running server reads them
     // through core/settings.js: the Server tab can override each one.
     access: { mode, allowed, maxAccounts },

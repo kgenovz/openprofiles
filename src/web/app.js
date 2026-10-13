@@ -71,7 +71,7 @@ function renamesFromForm(body) {
  * `settings` (core/settings.js) holds what the Server tab changes; the pages
  * read it on every request, so a save shows at once.
  */
-export function createApp({ config, db, accounts, log, settings = new Settings({ db }), startedAt = Date.now() }) {
+export function createApp({ config, db, accounts, log, settings = new Settings({ db }), startedAt = Date.now(), uploadReadMs = 60 * 1000 }) {
   const app = express();
   const auth = createAuth({ db, config });
   const themeVersion = () => crypto.createHash('sha1').update(themeCss(settings.branding())).digest('hex').slice(0, 10);
@@ -148,12 +148,14 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
   app.post('/signin', async (req, res, next) => {
     // A sign-in posted from another site would sign this browser into someone else's account.
     // Browsers that send Sec-Fetch-Site say where the form was: only this site's own pages count.
-    // Older ones are judged by Origin, when it names a site.
+    // Older ones are judged by Origin when they send one: our pages' referrer policy keeps it
+    // a real origin, so "null" (a sandboxed frame, a data: page) is foreign too. Without
+    // Origin at all (scripts, very old browsers) the post goes ahead.
     const fetchSite = req.get('sec-fetch-site');
     const origin = req.get('origin');
     const foreign = fetchSite
       ? !['same-origin', 'none'].includes(fetchSite)
-      : Boolean(origin && origin !== 'null' && origin !== ownOrigin && origin !== `${req.protocol}://${req.get('host')}`);
+      : Boolean(origin && origin !== ownOrigin && origin !== `${req.protocol}://${req.get('host')}`);
     if (foreign) {
       return sendPage(res, signInPage({ error: 'Sign in from this page.', site: site() }), 403);
     }
@@ -193,12 +195,19 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     res.redirect(303, '/signin');
   });
 
-  // Uploads are parsed in memory, so only one is read at a time across the server.
+  // Uploads are parsed in memory, so only one is read at a time across the server. A body
+  // still arriving after uploadReadMs is cut off, so a slow sender can't hold that turn for
+  // the 5 minutes Node itself would wait.
   let uploading = false;
   const oneUpload = (req, res, next) => {
     if (uploading) return res.status(429).set('Cache-Control', 'no-store').json({ error: 'Another upload is being read right now. Try again in a minute.' });
     uploading = true;
-    res.on('close', () => { uploading = false; });
+    const deadline = setTimeout(() => req.destroy(), uploadReadMs);
+    req.on('end', () => clearTimeout(deadline));
+    res.on('close', () => {
+      clearTimeout(deadline);
+      uploading = false;
+    });
     return next();
   };
 

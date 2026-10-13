@@ -28,6 +28,7 @@ export function snapshotHash({ library, addons, notifs }) {
  */
 export const USED_SINCE = `(a.last_login_at > @since
     OR COALESCE(a.last_addon_at, 0) > @since
+    OR COALESCE(a.last_seen_at, 0) > @since
     OR EXISTS (SELECT 1 FROM activity WHERE account_id = a.id AND at > @since)
     OR EXISTS (SELECT 1 FROM sessions WHERE account_id = a.id AND last_seen_at > @since))`;
 const ADDON_TOUCH_MS = 60 * 60 * 1000;
@@ -442,9 +443,14 @@ export class Accounts {
     return this.db.prepare('SELECT DISTINCT account_id FROM carryovers ORDER BY account_id').all().map((r) => r.account_id);
   }
 
-  /** Accounts set up before `since` and not used since (see USED_SINCE). */
+  /**
+   * Accounts set up before `since` and not used since (see USED_SINCE). Not one
+   * with a switch that never finished: its Stremio may be half-switched, and the
+   * profiles to put it right are only here.
+   */
   unusedSince(since) {
-    return this.db.prepare(`SELECT a.id FROM accounts a WHERE a.created_at <= @since AND NOT ${USED_SINCE} ORDER BY a.id`)
+    return this.db.prepare(`SELECT a.id FROM accounts a WHERE a.created_at <= @since AND NOT ${USED_SINCE}
+      AND NOT EXISTS (SELECT 1 FROM switch_journal WHERE account_id = a.id AND status = 'open') ORDER BY a.id`)
       .all({ since }).map((r) => r.id);
   }
 

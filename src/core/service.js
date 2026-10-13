@@ -25,7 +25,7 @@ import { snapshotHash } from './repo.js';
 import crypto from 'node:crypto';
 import { normalisePhoto } from '../addon/art.js';
 import { isPhoto, isValidAvatar } from '../addon/avatars.js';
-import { ADDON_ID, ID_PREFIX, ensureSelfAddon, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
+import { ADDON_ID, ID_PREFIX, ensureSelfAddon, hasToken, isSelfAddon, stremioInstallUrl } from '../addon/manifest.js';
 
 // Each clears 3.5:1 under a white initial (see the poster artboard in the M2 design).
 export const AVATAR_COLOURS = ['#e5484d', '#e05d0c', '#b7790b', '#3b8f4b', '#0f8f80', '#0a7fe0', '#8e4ec6', '#d6409f'];
@@ -170,8 +170,10 @@ export class ProfilesService {
     return ensureSelfAddon(addons, this.selfAddon.descriptor(this.repo.getState().addon_token, profileId));
   }
 
+  /** Installed means this account's link: a copy with an old one (e.g. a removed account's) doesn't count. */
   noteAddons(addons) {
-    if (this.selfAddon && this.repo.getState()) this.repo.setAddonInstalled(addons.some(isSelfAddon));
+    const state = this.repo.getState();
+    if (this.selfAddon && state) this.repo.setAddonInstalled(addons.some((a) => hasToken(a, state.addon_token)));
   }
 
   // ── read-only views ──────────────────────────────────────────────────────
@@ -237,9 +239,10 @@ export class ProfilesService {
       this.assertNoOpenJournal();
       const { authKey } = await this.session();
       const token = randomToken();
-      const addons = await this.stremio.getAddons(authKey);
+      let addons = await this.stremio.getAddons(authKey);
       if (addons.some(isSelfAddon)) {
-        await this.stremio.setAddons(authKey, ensureSelfAddon(addons, this.selfAddon.descriptor(token, this.repo.getState()?.active_profile_id)));
+        addons = ensureSelfAddon(addons, this.selfAddon.descriptor(token, this.repo.getState()?.active_profile_id));
+        await this.stremio.setAddons(authKey, addons);
       }
       this.repo.setAddonToken(token);
       this.noteAddons(addons);

@@ -75,11 +75,19 @@ export function createSelfAddon({ publicUrl }, presentation = () => DEFAULT_PRES
       manifest: buildManifest({ publicUrl }, presentation(), profileId),
       flags: {},
     }),
+    /** This server's add-on, but with another link than `token`'s: left by an account removed since. */
+    isStale: (addon, token) => isSelfAddon(addon) && String(addon.transportUrl ?? '').startsWith(`${publicUrl}/`)
+      && !hasToken(addon, token),
   };
 }
 
 export function isSelfAddon(addon) {
   return addon?.manifest?.id === ADDON_ID;
+}
+
+/** OpenProfiles with the link of the account whose add-on token is `token`: installed for that account. */
+export function hasToken(addon, token) {
+  return isSelfAddon(addon) && Boolean(token) && String(addon.transportUrl ?? '').endsWith(`/${token}/manifest.json`);
 }
 
 /**

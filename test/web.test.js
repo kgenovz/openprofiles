@@ -178,6 +178,8 @@ describe('where a sign-in may come from', () => {
       { 'sec-fetch-site': 'same-site', origin: 'https://other.example.com' },
       { 'sec-fetch-site': 'cross-site', origin: 'null' },
       { origin: 'https://evil.example' },
+      // Without Sec-Fetch-Site, "null" is a sandboxed frame or a data: page: our own pages send a real origin.
+      { origin: 'null' },
     ]) {
       const res = await signIn(headers);
       assert.equal(res.status, 403, JSON.stringify(headers));

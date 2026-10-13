@@ -7,6 +7,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const SNAPSHOT_RE = /^openprofiles-(\d{4}-\d{2}-\d{2})\.db$/;
 const KEEP_DAILY = 7;
 const KEEP_WEEKLY_DAYS = 28;
+// Unused accounts: a longer pause between daily runs means the server was down (see runDaily),
+// and one run removes at most this many, so a mistake can't empty a server in one night.
+const CLOCK_GAP_MS = 2 * DAY_MS;
+const MAX_REMOVALS = 5;
 
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 
@@ -39,7 +43,7 @@ export function snapshotDatabase(db, dataDir, now = Date.now()) {
 
 /**
  * The once-a-day jobs: database snapshot, removing accounts nobody has used
- * for removeUnusedDays (shared servers with ACCESS=open only), each account's
+ * for removeUnusedDays of the server running (shared servers with ACCESS=open only), each account's
  * automatic backup (skipped when nothing changed) and emptying bins of
  * profiles deleted more than BIN_DAYS ago. One account's failure doesn't stop
  * the others.
@@ -51,10 +55,26 @@ export async function runDaily({ db, dataDir, accounts, settings = null, log = s
   } catch (err) {
     log.error('Database snapshot failed', { error: err.message });
   }
+  const meta = (key) => db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null;
+  const setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
+  // "Unused" only counts time the server was up: nobody could use it while it was down. After a
+  // gap (no run for over CLOCK_GAP_MS, or never) the count starts again from now.
+  let previous = null;
+  try {
+    previous = JSON.parse(meta('last_daily_summary'))?.at ?? null;
+  } catch {
+    // never ran, or written by an older version
+  }
+  if (previous == null || now() - previous > CLOCK_GAP_MS || meta('unused_clock_since') == null) {
+    setMeta.run('unused_clock_since', String(now()));
+  }
   const days = settings && settings.get('access') === 'open' ? settings.get('removeUnusedDays') : 0;
-  if (days > 0) {
+  const since = now() - days * DAY_MS;
+  if (days > 0 && since >= Number(meta('unused_clock_since'))) {
     try {
-      summary.removed = await accounts.removeUnused(now() - days * DAY_MS);
+      const { removed, left } = await accounts.removeUnused(since, { limit: MAX_REMOVALS });
+      summary.removed = removed;
+      if (left) log.info('More unused accounts are due; they go in the next daily runs', { removed, left });
     } catch (err) {
       log.error('Removing unused accounts failed', { error: err.message });
     }
@@ -77,7 +97,6 @@ export async function runDaily({ db, dataDir, accounts, settings = null, log = s
     }
     if (i < ids.length - 1) await pause();
   }
-  const setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
   setMeta.run('last_daily', dayOf(now()));
   // Counts only, for the Server tab.
   setMeta.run('last_daily_summary', JSON.stringify({ at: now(), ...summary, snapshot: Boolean(summary.snapshot) }));

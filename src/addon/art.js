@@ -217,18 +217,23 @@ export function normalisePhoto(buffer) {
   return redraw(buffer, PHOTO_UPLOAD_MAX, (img) => img.resize(POSTER_SIZE, POSTER_SIZE, { fit: 'cover' }).jpeg({ quality: 85, mozjpeg: true }));
 }
 
+// Uploads are small pictures (the page shrinks photos first), but a few MB of PNG can claim a
+// huge size and take hundreds of MB to decode. Bigger than this is refused before decoding.
+const MAX_INPUT_PIXELS = 25_000_000;
+
 /** Decode a PNG, JPEG or WebP (nothing else) and draw it again; null when it can't be read. */
 async function redraw(buffer, maxBytes, finish) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > maxBytes) return null;
   let meta;
   try {
-    meta = await sharp(buffer, { limitInputPixels: 40_000_000 }).metadata();
+    meta = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
   } catch {
     return null;
   }
   if (!['png', 'jpeg', 'webp'].includes(meta.format)) return null;
+  if (!(meta.width * meta.height <= MAX_INPUT_PIXELS)) return null;
   try {
-    return await finish(sharp(buffer, { limitInputPixels: 40_000_000, pages: 1 }).rotate()).toBuffer();
+    return await finish(sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS, pages: 1 }).rotate()).toBuffer();
   } catch {
     return null;
   }
