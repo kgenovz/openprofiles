@@ -9,7 +9,8 @@ import {
   detailsSource, givesOwnDetailsOnly, givesTitleDetails, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
 } from './cinemeta.js';
 import {
-  MAX_MS, RESUME_MS, SETTLE_MS, UNTOUCHED_MS, hasOwnProgress, isInFlight, judge, timeOf, withProgress,
+  IN_FLIGHT_MS, MAX_MS, RESUME_MS, SETTLE_MS, SWEEP_AFTER_MS, UNTOUCHED_MS, hasOwnProgress, isInFlight, judge, mergeProgress,
+  startedBeforeSwitch, timeOf, withProgress,
 } from './carryover.js';
 import { sealExport, openExport } from './exporter.js';
 import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
@@ -18,7 +19,7 @@ import {
 } from './guard.js';
 import { parseStremShareBackup, sameAccount, suggestedProfileName } from './importer.js';
 import {
-  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, countContinueWatching, hasId,
+  LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, countContinueWatching, hasId, tombstone,
 } from './library.js';
 import { Mutex } from './lock.js';
 import { snapshotHash } from './repo.js';
@@ -921,7 +922,7 @@ export class ProfilesService {
       this.checkLiveSize(live);
       this.assertPlausibleLive(live, profile);
       // Another profile's title still playing on some device isn't this profile's to save.
-      const plan = this.planCarryovers(live.library, profile.id);
+      const plan = this.planCarryovers(live.library, profile.id, [...this.followed(), ...this.strayRecords(live.library, profile.id)]);
       const copy = this.profileCopy({ ...this.capture(live), library: plan.library });
       const now = this.now();
       this.repo.transaction(() => {
@@ -969,8 +970,10 @@ export class ProfilesService {
     this.assertPlausibleLive(live, outgoing);
 
     // Titles another profile kept playing on some device go back to that profile instead of
-    // into the outgoing one. Those still playing, and the outgoing profile's own, are followed.
-    const plan = this.planCarryovers(live.library, outgoing?.id ?? null);
+    // into the outgoing one, with any the last switch couldn't follow yet. Those still playing,
+    // and the outgoing profile's own, are followed.
+    const strays = this.strayRecords(live.library, outgoing?.id ?? null);
+    const plan = this.planCarryovers(live.library, outgoing?.id ?? null, [...this.followed(), ...strays]);
     const targetProgress = plan.progress.get(profileId);
     if (targetProgress) targetSnap.library = withProgress(targetSnap.library, targetProgress) ?? targetSnap.library;
     const follow = this.nextFollowed(plan, outgoing?.id ?? null, profileId);
@@ -989,7 +992,8 @@ export class ProfilesService {
     });
     this.log.info('Switch started', { journalId, from: outgoing?.id ?? null, to: profileId });
 
-    // 8-10. Write to Stremio.
+    // 8-10. Write to Stremio. A device's save stamped after this was made after the switch.
+    const switchAt = this.now();
     const { written, ...result } = await this.applyOrFail('switch', journalId, authKey, live, targetSnap, profileId,
       new Set(follow.map((r) => r.base._id)));
 
@@ -1002,6 +1006,9 @@ export class ProfilesService {
       this.repo.replaceCarryovers(follow
         .map((r) => ({ ...r, written: written.get(r.base._id) ?? plan.liveById.get(r.base._id), putMtime: null }))
         .filter((r) => r.written && !hasOwnProgress(r.written)));
+      // A few minutes on, the whole library is looked over once for titles playing before this
+      // switch that Stremio hadn't heard of yet (strayRecords).
+      this.repo.setSweep(outgoing ? { switchAt, fromProfileId: outgoing.id, toProfileId: profileId } : null);
     });
     this.repo.pruneBackups();
     this.repo.logActivity('switch', `Switched from ${outgoing ? `"${outgoing.name}"` : '(none)'} to "${target.name}"`);
@@ -1143,6 +1150,61 @@ export class ProfilesService {
   }
 
   /**
+   * Titles playing before the last switch (into `activeId`) that it couldn't
+   * follow, because the device hadn't told Stremio yet: found in `library` (the
+   * whole live library) by startedBeforeSwitch, they're followed from now on as
+   * the profile switched from's, like any other. `[]` when the last switch
+   * wasn't into `activeId`, or is too long ago for a position to prove anything.
+   */
+  strayRecords(library, activeId) {
+    const sweep = this.repo.getSweep();
+    const now = this.now();
+    if (!sweep || sweep.toProfileId !== activeId || now - sweep.switchAt > IN_FLIGHT_MS) return [];
+    const ownerRow = this.repo.getProfileRow(sweep.fromProfileId);
+    const targetRow = this.repo.getProfileRow(activeId);
+    if (!ownerRow || !targetRow) return [];
+    let owner;
+    let target;
+    try {
+      owner = new Map(decodeSnapshot(this.repo.cipher, ownerRow, ownerRow.name).library.filter(hasId).map((it) => [it._id, it]));
+      target = new Map(decodeSnapshot(this.repo.cipher, targetRow, targetRow.name).library.filter(hasId).map((it) => [it._id, it]));
+    } catch (err) {
+      this.log.warn("Couldn't look over the last switch for titles still playing", { error: err.message });
+      return [];
+    }
+    const followed = new Set(this.followed().map((r) => r.base._id));
+    const at = new Date(sweep.switchAt).toISOString();
+    const records = [];
+    for (const item of library) {
+      if (followed.has(item._id) || String(item._id).startsWith(ID_PREFIX)) continue;
+      const mine = target.get(item._id);
+      if (!startedBeforeSwitch(item, sweep.switchAt, mine)) continue;
+      // What the switch wrote: the target's copy, or the title hidden. The owner's copy carries
+      // the device's position, over the owner's own history of the title if it has one.
+      const written = { ...(mine ?? tombstone(item, at)), _mtime: at };
+      const theirs = owner.get(item._id);
+      records.push({
+        ownerProfileId: sweep.fromProfileId,
+        base: hasOwnProgress(theirs) ? mergeProgress(theirs, item, written) : item,
+        written,
+        createdAt: sweep.switchAt,
+        changedAt: now,
+        seenMtime: item._mtime,
+        putMtime: null,
+        expiresAt: Math.min(now + RESUME_MS, sweep.switchAt + MAX_MS),
+      });
+    }
+    if (records.length) this.log.info('Found titles still playing from before a switch', { titles: records.length });
+    return records;
+  }
+
+  /** Nothing is followed or looked over any more (a restore or recovery rewrote the account). */
+  stopFollowing() {
+    this.repo.replaceCarryovers([]);
+    this.repo.setSweep(null);
+  }
+
+  /**
    * Put owners' new progress into their saved copies (in the bin too), never
    * moving a title backwards, so saving the same progress twice changes nothing.
    */
@@ -1180,6 +1242,23 @@ export class ProfilesService {
       if (!this.repo.getAccount() || this.repo.getOpenJournal()) return none;
       const now = this.now();
       const activeId = this.repo.getState()?.active_profile_id ?? null;
+      // Once per switch, SWEEP_AFTER_MS on: the whole library, for titles playing before it that
+      // Stremio hadn't heard of yet. A network failure leaves it for the next round.
+      const sweep = this.repo.getSweep();
+      if (sweep && now - sweep.switchAt >= SWEEP_AFTER_MS) {
+        let strays = [];
+        if (sweep.toProfileId === activeId) {
+          try {
+            strays = this.strayRecords(await this.stremio.getLibrary(this.repo.getAuthKey()), activeId);
+          } catch (err) {
+            if (err.kind !== 'auth') throw err;
+          }
+        }
+        this.repo.transaction(() => {
+          this.repo.setSweep(null);
+          if (strays.length) this.repo.replaceCarryovers([...this.followed(), ...strays]);
+        });
+      }
       const records = this.followed().filter((r) => now < r.createdAt + MAX_MS && r.ownerProfileId !== activeId);
       if (records.length === 0) {
         this.repo.replaceCarryovers([]);
@@ -1272,7 +1351,7 @@ export class ProfilesService {
         this.repo.closeJournal(j.id, 'finished', result.warnings);
         // A whole rewrite (this, going back, a restore) ends following titles played elsewhere:
         // what a device did since can't be told apart from what was just written.
-        this.repo.replaceCarryovers([]);
+        this.stopFollowing();
       });
       this.repo.pruneBackups();
       this.repo.logActivity('recovery', 'Finished an interrupted switch');
@@ -1298,7 +1377,7 @@ export class ProfilesService {
       // write, so closing the journal is all that's left.
       this.repo.transaction(() => {
         this.repo.closeJournal(j.id, 'rolled_back', result.warnings);
-        this.repo.replaceCarryovers([]);
+        this.stopFollowing();
       });
       this.repo.logActivity('recovery', 'Went back to before an interrupted switch');
       this.log.info('Interrupted operation rolled back', { journalId: j.id });
@@ -1408,7 +1487,7 @@ export class ProfilesService {
       this.repo.transaction(() => {
         this.repo.saveProfileSnapshot(active.id, target);
         this.repo.closeJournal(journalId, 'finished', result.warnings);
-        this.repo.replaceCarryovers([]);
+        this.stopFollowing();
       });
       this.repo.pruneBackups();
       this.repo.logActivity('restore', `Restored "${row.label}"`);

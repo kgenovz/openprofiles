@@ -148,6 +148,16 @@ the bin still gets progress (into its binned row) and the put-back. Known gap: a
 more than 10 s behind, or someone in B seeking past the time since the switch, can still read as
 A carrying on a title A had barely started.
 
+*Look-over after a switch (2026-10-13):* a live test started a movie seconds before switching,
+before the device had told Stremio, so the switch had nothing to follow and the movie's saves
+went into B. Each switch now leaves a `meta` row `sweep:<account>` (`switchAt`, from, to).
+`SWEEP_AFTER_MS` (4 min, past the player's first 3-minute save) on, the background check reads
+the whole library once: a title saved since the switch at a position it couldn't have reached
+since (`startedBeforeSwitch`, the same proof as above) whose B copy has no history of its own is
+followed as A's from then on (`strayRecords`), and goes home like any other. A switch away or
+Save now before the look-over runs the same test on the library it reads anyway. Restore and
+recovery drop the row; it's let go after 30 minutes.
+
 ## In-Stremio switcher
 
 - Manifest: catalog `{ id:'profiles', type:<'other' or similar>, name:'Switch profile' }`, the

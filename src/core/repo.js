@@ -380,6 +380,26 @@ export class AccountRepo {
     }
   }
 
+  /**
+   * The last switch, for the one look at the whole library a few minutes after
+   * it (service.js strayRecords): `{ switchAt, fromProfileId, toProfileId }`,
+   * or null. Kept in meta so a restart doesn't lose it.
+   */
+  getSweep() {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(`sweep:${this.accountId}`);
+    try {
+      return row ? JSON.parse(row.value) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setSweep(sweep) {
+    const key = `sweep:${this.accountId}`;
+    if (!sweep) this.db.prepare('DELETE FROM meta WHERE key = ?').run(key);
+    else this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(sweep));
+  }
+
   getOpenJournal() {
     const row = this.db.prepare(`SELECT * FROM switch_journal WHERE account_id = ? AND status = 'open'
       ORDER BY id DESC LIMIT 1`).get(this.accountId);
@@ -438,9 +458,11 @@ export class Accounts {
       .run(now, id, now - ADDON_TOUCH_MS);
   }
 
-  /** Accounts following titles that kept playing after a switch. */
+  /** Accounts following titles that kept playing after a switch, or with a switch still to look over. */
   withCarryovers() {
-    return this.db.prepare('SELECT DISTINCT account_id FROM carryovers ORDER BY account_id').all().map((r) => r.account_id);
+    return this.db.prepare(`SELECT account_id FROM carryovers
+      UNION SELECT CAST(substr(key, 7) AS INTEGER) FROM meta WHERE key LIKE 'sweep:%'
+      ORDER BY 1`).all().map((r) => r.account_id);
   }
 
   /**
@@ -454,8 +476,9 @@ export class Accounts {
       .all({ since }).map((r) => r.id);
   }
 
-  /** Everything for the account goes with it (foreign keys cascade). */
+  /** Everything for the account goes with it (foreign keys cascade; its meta row by hand). */
   delete(id) {
     this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+    this.db.prepare('DELETE FROM meta WHERE key = ?').run(`sweep:${id}`);
   }
 }

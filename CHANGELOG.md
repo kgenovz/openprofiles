@@ -5,6 +5,8 @@
 - **Watching on another device during a switch:** a title goes back to the profile that was
   watching only when it clearly kept playing there; when in doubt, the profile in use keeps it, so
   its own viewing is never taken away or erased.
+  A title started seconds before a switch, before Stremio heard of it, is found about 4 minutes
+  later (the server looks over the whole library once per switch) and goes back the same way.
 - **Backups page:** each group shows its newest 5, with the rest under "Show older".
 - **Owner:** the server's owner is their Stremio account, not an account number. If the owner
   deletes their account, someone signing up later no longer becomes the owner; the owner signing

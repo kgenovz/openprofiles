@@ -28,6 +28,12 @@ export const UNTOUCHED_MS = 45 * 60 * 1000;
 export const RESUME_MS = 2 * 60 * 60 * 1000;
 /** Never follow a title longer than this. */
 export const MAX_MS = 12 * 60 * 60 * 1000;
+/**
+ * A device that started playing seconds before a switch may not have told Stremio yet, so the
+ * switch can't follow it. The player saves its position within its first 3 minutes, so this
+ * long after a switch the whole library is looked over once for titles like that (startedBeforeSwitch).
+ */
+export const SWEEP_AFTER_MS = 4 * 60 * 1000;
 // Seeking back a little after the switch still counts as carrying on.
 const REWIND_SLACK_MS = 2 * 60 * 1000;
 // A position this far past the time since the switch proves playback began before it: playing at
@@ -117,6 +123,18 @@ export function hasOwnProgress(item) {
   const s = item?.state || {};
   return Boolean(s.video_id || s.watched)
     || ['timeOffset', 'timeWatched', 'flaggedWatched', 'timesWatched', 'overallTimeWatched'].some((k) => s[k] > 0);
+}
+
+/**
+ * A title saved after a switch (at `since`) that wasn't followed, at a position
+ * it couldn't have reached since: it was already playing, so it belongs to the
+ * profile in use before. The same proof as carriesOn for a barely started
+ * title. Never one the profile switched to has a history of (`targetCopy`, its
+ * own copy, what the switch wrote): that may just be it resuming.
+ */
+export function startedBeforeSwitch(item, since, targetCopy) {
+  if (!hasId(item) || !item.state?.video_id || hasOwnProgress(targetCopy)) return false;
+  return carriesOn({ ...item, state: { ...item.state, timeOffset: 0 } }, item, since);
 }
 
 /**

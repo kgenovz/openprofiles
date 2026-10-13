@@ -397,6 +397,88 @@ describe('when unsure, the title stays with the profile in use', () => {
   });
 });
 
+describe("a title playing before the switch that Stremio hadn't heard of yet", () => {
+  // Seen live: a movie started seconds before the switch, its start not yet in Stremio, so the
+  // switch had nothing to follow. Its saves only show up afterwards.
+
+  /** Original's TV started a movie unseen; then the switch to Kids. */
+  async function switchedUnseen() {
+    const ctx = await linkedWithKids();
+    await ctx.service.switchTo(ctx.kids.id);
+    assert.deepEqual(ctx.repo.listCarryovers(), [], 'nothing to follow at the switch');
+    return { ...ctx, switchAt: ctx.repo.getSweep().switchAt };
+  }
+
+  /** A device saves `id`, playing since `lead` before the switch (negative: started after it). */
+  function deviceSaves(ctx, id, lead) {
+    const at = ctx.service.now();
+    ctx.fake.library.set(id, playing(id, { offset: at - ctx.switchAt + lead, at }));
+  }
+
+  it('is found a few minutes after the switch and goes back to the profile that was watching', async () => {
+    const ctx = await switchedUnseen();
+    const { service, repo, fake, kids, original } = ctx;
+    ctx.advance(3 * MIN);
+    deviceSaves(ctx, 'tt-tv', 20 * 1000);
+    ctx.advance(90 * 1000);
+    await service.checkCarryovers();
+    assert.equal(repo.listCarryovers()[0]?.ownerProfileId, original.id, 'followed as Original\'s');
+    assert.equal(repo.getSweep(), null, 'looked over once');
+
+    ctx.advance(2 * MIN);
+    deviceSaves(ctx, 'tt-tv', 20 * 1000);
+    const last = fake.library.get('tt-tv').state.timeOffset;
+    await service.checkCarryovers();
+    ctx.advance(8 * MIN);
+    assert.equal((await service.checkCarryovers()).settled, 1);
+    assert.equal(savedItem(repo, original.id, 'tt-tv').state.timeOffset, last, 'Original gets the progress');
+    assert.equal(countContinueWatching([fake.library.get('tt-tv')]), 0, "out of Kids' Continue Watching");
+    assert.equal(countContinueWatching(saved(repo, kids.id)), 0);
+  });
+
+  it('one Kids started after the switch stays with Kids', async () => {
+    const ctx = await switchedUnseen();
+    ctx.advance(3 * MIN);
+    deviceSaves(ctx, 'tt-kids', -30 * 1000);
+    ctx.advance(90 * 1000);
+    await ctx.service.checkCarryovers();
+    assert.deepEqual(ctx.repo.listCarryovers(), []);
+    assert.equal(ctx.repo.getSweep(), null);
+    assert.equal(countContinueWatching([ctx.fake.library.get('tt-kids')]), 1, 'still in Kids\' Continue Watching');
+  });
+
+  it("switching back before the look-over still sends it home, and Kids doesn't keep it", async () => {
+    const ctx = await switchedUnseen();
+    const { service, repo, kids, original } = ctx;
+    ctx.advance(2 * MIN);
+    deviceSaves(ctx, 'tt-tv', 20 * 1000);
+    const offset = ctx.fake.library.get('tt-tv').state.timeOffset;
+    await service.switchTo(original.id);
+    assert.equal(savedItem(repo, original.id, 'tt-tv').state.timeOffset, offset);
+    assert.equal(countContinueWatching(saved(repo, kids.id)), 0, "not saved into Kids");
+  });
+
+  it("never one Kids has a history of: that may be Kids resuming it", async () => {
+    const ctx = await linkedWithKids();
+    const { service, repo, kids } = ctx;
+    repo.saveProfileLibrary(kids.id, [playing('tt-m', { offset: 50 * MIN, at: service.now() - 24 * 60 * MIN })]);
+    await service.switchTo(kids.id);
+    const c = { ...ctx, switchAt: repo.getSweep().switchAt };
+    ctx.advance(3 * MIN);
+    deviceSaves(c, 'tt-m', 20 * 1000);
+    ctx.advance(90 * 1000);
+    await service.checkCarryovers();
+    assert.deepEqual(repo.listCarryovers(), []);
+  });
+
+  it('a restore drops the look-over', async () => {
+    const ctx = await switchedUnseen();
+    const [backup] = ctx.repo.listBackups().filter((b) => b.kind === 'pre_switch');
+    await ctx.service.restoreBackup(backup.id);
+    assert.equal(ctx.repo.getSweep(), null);
+  });
+});
+
 describe('putting a title back', () => {
   it("a put-back that lands but whose answer is lost doesn't cost the owner its progress", async () => {
     const ctx = await watching();
