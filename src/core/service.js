@@ -9,7 +9,7 @@ import {
   detailsSource, givesOwnDetailsOnly, givesTitleDetails, isFullMetadata, needsStock, sameSettings, settingsForHandoff,
 } from './cinemeta.js';
 import {
-  MAX_MS, RESUME_MS, SETTLE_MS, UNTOUCHED_MS, isInFlight, judge, withProgress,
+  MAX_MS, RESUME_MS, SETTLE_MS, UNTOUCHED_MS, hasOwnProgress, isInFlight, judge, timeOf, withProgress,
 } from './carryover.js';
 import { sealExport, openExport } from './exporter.js';
 import { FetchError, checkManifest, fetchManifest as guardedFetchManifest, normaliseAddonUrl } from './fetchGuard.js';
@@ -994,10 +994,11 @@ export class ProfilesService {
     this.repo.transaction(() => {
       this.repo.setActiveProfile(profileId);
       this.repo.closeJournal(journalId, 'finished', result.warnings);
-      // A title the switch left as it was is still what Stremio has.
+      // A title the switch left as it was is still what Stremio has. One the profile switched to
+      // has watched itself isn't followed: playing it from now on may well be that profile.
       this.repo.replaceCarryovers(follow
-        .map((r) => ({ ...r, written: written.get(r.base._id) ?? plan.liveById.get(r.base._id) }))
-        .filter((r) => r.written));
+        .map((r) => ({ ...r, written: written.get(r.base._id) ?? plan.liveById.get(r.base._id), putMtime: null }))
+        .filter((r) => r.written && !hasOwnProgress(r.written)));
     });
     this.repo.pruneBackups();
     this.repo.logActivity('switch', `Switched from ${outgoing ? `"${outgoing.name}"` : '(none)'} to "${target.name}"`);
@@ -1090,7 +1091,9 @@ export class ProfilesService {
    * library, or just those titles). Returns the verdicts, each owner's copies
    * with new progress, and the library as the profile in use should save it:
    * titles another profile kept playing put back to what the switch wrote.
-   * Records whose owner is `activeId` again, or gone, drop out.
+   * Records whose owner is `activeId` again, or gone for good, drop out. An
+   * owner in the bin still counts: its title leaves the profile in use all the
+   * same, and the progress goes into its saved copy, there if it's restored.
    */
   planCarryovers(library, activeId, records = this.followed()) {
     const liveById = new Map(library.filter(hasId).map((it) => [it._id, it]));
@@ -1098,7 +1101,8 @@ export class ProfilesService {
     const putBack = new Map();
     const progress = new Map();
     for (const rec of records) {
-      if (rec.ownerProfileId === activeId || !this.repo.getProfile(rec.ownerProfileId)) continue;
+      const id = rec.ownerProfileId;
+      if (id === activeId || !(this.repo.getProfile(id) || this.repo.getBinProfile(id))) continue;
       const item = liveById.get(rec.base._id);
       const v = judge(rec, item);
       verdicts.push({ rec, v, item });
@@ -1135,10 +1139,13 @@ export class ProfilesService {
     return next;
   }
 
-  /** Put owners' new progress into their saved copies, never moving a title backwards. */
+  /**
+   * Put owners' new progress into their saved copies (in the bin too), never
+   * moving a title backwards, so saving the same progress twice changes nothing.
+   */
   saveProgress(progress) {
     for (const [ownerId, items] of progress) {
-      const row = this.repo.getProfileRow(ownerId);
+      const row = this.repo.getProfileRow(ownerId) ?? this.repo.getBinProfileRow(ownerId);
       if (!row) continue;
       try {
         const next = withProgress(decodeSnapshot(this.repo.cipher, row, row.name).library, items);
@@ -1179,9 +1186,12 @@ export class ProfilesService {
       try {
         items = await this.stremio.getLibraryItems(this.repo.getAuthKey(), [...new Set(records.map((r) => r.base._id))]);
       } catch (err) {
+        // Signed out: keep following until the records expire. The next read that works (this
+        // check after signing in again, or a switch) sorts out what happened meanwhile.
         if (err.kind === 'auth') {
-          this.repo.replaceCarryovers([]);
-          return none;
+          const kept = records.filter((r) => r.expiresAt > now);
+          this.repo.replaceCarryovers(kept);
+          return { following: kept.length, settled: 0 };
         }
         throw err;
       }
@@ -1195,38 +1205,44 @@ export class ProfilesService {
         } else if (item._mtime !== rec.seenMtime) {
           next.push(seenMoving(rec, v.item, item, now));
         } else if (now - rec.changedAt >= SETTLE_MS || rec.expiresAt <= now) {
-          settle.push({ rec, merged: v.item });
+          settle.push({ rec, merged: v.item, item });
         } else {
           next.push({ ...rec, base: v.item });
         }
       }
+      if (settle.length === 0) {
+        this.repo.replaceCarryovers(next);
+        return { following: next.length, settled: 0 };
+      }
 
-      let putBack = [];
-      if (settle.length) {
-        try {
-          const { authKey } = await this.session({ spend: false });
-          const at = this.now();
-          putBack = settle.map(({ rec }, i) => ({ ...rec.written, _mtime: new Date(at - i).toISOString() }));
-          await this.stremio.putLibrary(authKey, putBack);
-        } catch (err) {
-          this.log.warn('Putting back titles that stopped playing elsewhere failed; trying again later', { error: err.message });
-          putBack = [];
-          next.push(...settle.map(({ rec, merged }) => ({ ...rec, base: merged })));
-        }
-      }
+      // Stremio keeps the copy with the newest _mtime, and a device whose clock runs ahead stamps
+      // its saves in the future: a put-back stamped with the server's time would be ignored.
+      const at = this.now();
+      const putBack = settle.map(({ rec, item }, i) => ({
+        ...rec.written,
+        _mtime: new Date(Math.max(at - i, timeOf(item._mtime) + 1)).toISOString(),
+      }));
+      // The owners' progress is saved first, so a put-back that lands but whose answer is lost
+      // can't cost it: the next read takes the put-back (its _mtime) for untouched.
       const progress = new Map();
-      if (putBack.length) {
-        settle.forEach(({ rec, merged }, i) => {
-          progress.set(rec.ownerProfileId, [...(progress.get(rec.ownerProfileId) ?? []), merged]);
-          if (rec.expiresAt > now) next.push({ ...rec, base: merged, written: putBack[i], seenMtime: null });
-        });
-      }
+      for (const { rec, merged } of settle) progress.set(rec.ownerProfileId, [...(progress.get(rec.ownerProfileId) ?? []), merged]);
       this.repo.transaction(() => {
         this.saveProgress(progress);
-        this.repo.replaceCarryovers(next);
+        this.repo.replaceCarryovers([...next, ...settle.map(({ rec, merged }, i) => ({ ...rec, base: merged, putMtime: putBack[i]._mtime }))]);
       });
+      try {
+        const { authKey } = await this.session({ spend: false });
+        await this.stremio.putLibrary(authKey, putBack);
+      } catch (err) {
+        this.log.warn('Putting back titles that stopped playing elsewhere failed; trying again later', { error: err.message });
+        return { following: next.length + settle.length, settled: 0 };
+      }
+      settle.forEach(({ rec, merged }, i) => {
+        if (rec.expiresAt > now) next.push({ ...rec, base: merged, written: putBack[i], seenMtime: null, putMtime: null });
+      });
+      this.repo.replaceCarryovers(next);
       this.logProgressMoved(progress.keys());
-      if (putBack.length) this.log.info('Titles played elsewhere after a switch went back to their profiles', { titles: putBack.length });
+      this.log.info('Titles played elsewhere after a switch went back to their profiles', { titles: putBack.length });
       return { following: next.length, settled: putBack.length };
     });
   }

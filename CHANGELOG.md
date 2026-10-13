@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Watching on another device during a switch:** a title goes back to the profile that was
+  watching only when it clearly kept playing there; when in doubt, the profile in use keeps it, so
+  its own viewing is never taken away or erased.
+
 ## 1.1.0 (2026-10-12)
 
 - **Watching on another device during a switch:** the title's progress goes to the profile that

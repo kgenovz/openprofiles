@@ -133,6 +133,21 @@ the last save seen means stopped, so it puts the written copy back (out of B's C
 and keeps following for a resume until 2 h after the last movement. Untouched titles go after
 45 min, everything after 12 h; a restore, Finish or Go back stops following. The hint was removed.
 
+*Tightened the same day: when unsure, the profile in use keeps it.* A review found the "A's"
+verdict too loose, and the put-back then erased B's own viewing. Now A's needs strong evidence,
+anything else behaves as if nothing were followed: never a title B's copy (what the switch
+wrote) has progress or marks in (not even followed); only the very next episode (same season +1,
+or next season's first; never specials, never a jump); with A under 2 min in at the switch
+(just started, or finished and back at 0), a position more than 10 s past the time since the
+switch (device `lastWatched` − follow time), i.e. playback began before it (a live test: started
+16 s before, saved at 89 s 74 s after); finished counts only sooner than the video's length after
+the switch. A's progress is saved before the put-back, whose `_mtime` (max of now and the
+device's + 1 ms, as a fast device clock would win otherwise) is remembered, so a put that lands
+with its answer lost reads as untouched. Signed out keeps records until they expire; an owner in
+the bin still gets progress (into its binned row) and the put-back. Known gap: a device clock
+more than 10 s behind, or someone in B seeking past the time since the switch, can still read as
+A carrying on a title A had barely started.
+
 ## In-Stremio switcher
 
 - Manifest: catalog `{ id:'profiles', type:<'other' or similar>, name:'Switch profile' }`, the
