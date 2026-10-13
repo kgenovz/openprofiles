@@ -38,7 +38,7 @@ function handoffPage(target, colour = BRAND_COLOUR) {
 }
 
 // Only these targets, so /refresh/go can't be pointed anywhere else.
-const REDIRECT_TARGETS = { home: 'stremio:///', library: 'stremio:///library' };
+export const REDIRECT_TARGETS = { home: 'stremio:///', library: 'stremio:///library' };
 
 /** The profile's uploaded photo when its picture is the photo, else null. */
 function photoOf(service, p) {
@@ -81,7 +81,7 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
   const base = (token) => `${publicUrl}/${token}`;
 
   function posterUrl(token, p, active) {
-    return `${base(token)}/poster/${p.id}.png?v=${artVersion(p.name, p.avatar_colour, p.avatar_preset, active)}`;
+    return `${base(token)}/poster/${p.id}.png?v=${artVersion(p.name, p.avatar_colour, p.avatar_preset, active, Boolean(p.has_passcode))}`;
   }
 
   function preview(token, p, active) {
@@ -97,8 +97,9 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
 
   function describe(p, active) {
     const counts = `${p.library_count} title${p.library_count === 1 ? '' : 's'} · ${p.addon_count} add-on${p.addon_count === 1 ? '' : 's'}`;
-    return active
-      ? `${counts}. This is the profile in use.`
+    if (active) return `${counts}.${p.has_passcode ? ' Locked with a passcode.' : ''} This is the profile in use.`;
+    return p.has_passcode
+      ? `${counts}. Locked: opening this asks for its passcode.`
       : `${counts}. Opening this switches the account to ${p.name}.`;
   }
 
@@ -134,6 +135,15 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
       // Stremio's TV apps use their own link field (a TV has no browser). Works on Android TV (tested 2026-10-12).
       androidTvUrl: REDIRECT_TARGETS.library,
     };
+  }
+
+  /**
+   * For a locked profile: its passcode is entered in a browser, on the unlock
+   * page (web/app.js), which switches. TVs get the same page, if they have a browser.
+   */
+  function unlockStream(token, p) {
+    const url = `${base(token)}/unlock/${p.id}`;
+    return { name: 'OpenProfiles', description: `${p.name} is locked\nTap to unlock it in a browser.`, externalUrl: url, androidTvUrl: url };
   }
 
   // An HTTP redirect into the app. Browsers still show the response body while
@@ -201,6 +211,17 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
     const p = id && service.repo.getProfile(id);
     if (!p) return res.json({ streams: [pageStream("Couldn't switch: that profile no longer exists.\nTap to open OpenProfiles.")] });
 
+    // A locked profile doesn't switch from here. Unlocking switches, so refreshing afterwards
+    // (here, or on a TV after unlocking on a phone) lands in it; with no unlock, nothing changes.
+    if (p.has_passcode && p.id !== state.active_profile_id) {
+      return res.json({
+        streams: [
+          unlockStream(state.addon_token, p),
+          refreshStream('Unlocked it on another device?\nTap here to refresh Stremio.', req.get('user-agent')),
+        ],
+      });
+    }
+
     const work = service.switchTo(id);
     const outcome = await Promise.race([
       work.then((result) => ({ result }), (error) => ({ error })),
@@ -229,9 +250,10 @@ export function createAddonRouter({ config, accounts, log, settings, waitMs = SW
     const p = service.repo.getProfile(Number(req.params.id));
     if (!p) return res.status(404).end();
     const active = p.id === state.active_profile_id;
+    const locked = Boolean(p.has_passcode);
     // A photo preset names its photo's hash, so the cache key changes with the photo.
-    const png = await art.get(`poster|${p.name}|${p.avatar_colour}|${p.avatar_preset}|${active}`,
-      () => renderPoster({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, active, photo: photoOf(service, p) }));
+    const png = await art.get(`poster|${p.name}|${p.avatar_colour}|${p.avatar_preset}|${active}|${locked}`,
+      () => renderPoster({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, active, locked, photo: photoOf(service, p) }));
     res.set('Cache-Control', 'private, max-age=86400').type('png').send(png);
   }));
 

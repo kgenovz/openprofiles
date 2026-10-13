@@ -22,6 +22,7 @@ import {
   LIBRARY_CHUNK, NOTIF_CHUNK, buildLibraryChanges, buildNotifChanges, chunk, countActive, countContinueWatching, hasId, tombstone,
 } from './library.js';
 import { Mutex } from './lock.js';
+import { MAX_WRONG_CODES, WRONG_CODE_WAIT_MS, checkPasscode, hashPasscode, isPasscode, isPasscodeHash } from './passcode.js';
 import { snapshotHash } from './repo.js';
 import crypto from 'node:crypto';
 import { normalisePhoto } from '../addon/art.js';
@@ -143,6 +144,8 @@ export class ProfilesService {
     this.addonStash = new Map();
     this.fetchTimes = [];
     this.stremioTimes = [];
+    // Wrong passcodes in a row, from any page, and until when codes are refused after too many.
+    this.wrongCodes = { count: 0, until: 0 };
   }
 
   /** Count one trip to Stremio against the account's budget, or refuse. */
@@ -938,13 +941,66 @@ export class ProfilesService {
     });
   }
 
-  // ── switching ────────────────────────────────────────────────────────────
+  // ── passcodes ────────────────────────────────────────────────────────────
 
-  switchTo(profileId) {
-    return this.lock.run(() => this.doSwitch(profileId));
+  /**
+   * Set, change or remove (`code` null) a profile's passcode. Changing or
+   * removing one needs the current code, unless `fresh`: the person has just
+   * signed in with the Stremio password, which is how a forgotten code is reset.
+   */
+  setPasscode(id, { code = null, current = null, fresh = false } = {}) {
+    return this.lock.run(async () => {
+      const profile = this.requireProfile(id);
+      if (code !== null && !isPasscode(code)) throw new UserError('BAD_PASSCODE', 'A passcode is 4 digits.');
+      const had = Boolean(profile.has_passcode);
+      if (!had && code === null) return { profile, kind: null };
+      if (had && !fresh) await this.verifyPasscode(profile, current);
+      this.repo.setPasscodeHash(id, code === null ? null : await hashPasscode(code));
+      const kind = code === null ? 'remove' : had ? 'change' : 'set';
+      const detail = { set: `Locked "${profile.name}" with a passcode`, change: `Changed the passcode of "${profile.name}"`, remove: `Removed the passcode of "${profile.name}"` }[kind];
+      this.repo.logActivity('passcode', had && fresh ? `${detail} (after signing in again)` : detail);
+      return { profile: this.repo.getProfile(id), kind };
+    });
   }
 
-  async doSwitch(profileId) {
+  /**
+   * Check a locked profile's code; call inside the lock, so attempts can't race
+   * past the limit. Every wrong code counts against the account, wherever it
+   * was entered; MAX_WRONG_CODES in a row refuse codes for WRONG_CODE_WAIT_MS,
+   * and a right one starts the count again. A missing or malformed code isn't
+   * a try.
+   */
+  async verifyPasscode(profile, code) {
+    const now = this.now();
+    if (this.wrongCodes.until > now) {
+      const minutes = Math.ceil((this.wrongCodes.until - now) / 60000);
+      throw new UserError('PASSCODE_WAIT', `Too many wrong passcodes. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`);
+    }
+    if (!code) throw new UserError('PASSCODE_NEEDED', `Enter ${profile.name}'s passcode.`);
+    if (!isPasscode(code)) throw new UserError('BAD_PASSCODE', 'A passcode is 4 digits.');
+    if (await checkPasscode(code, this.repo.getPasscodeHash(profile.id))) {
+      this.wrongCodes = { count: 0, until: 0 };
+      return;
+    }
+    if (++this.wrongCodes.count < MAX_WRONG_CODES) throw new UserError('WRONG_PASSCODE', "That passcode isn't right.");
+    const minutes = WRONG_CODE_WAIT_MS / 60000;
+    this.wrongCodes = { count: 0, until: now + WRONG_CODE_WAIT_MS };
+    this.repo.logActivity('passcode', `${MAX_WRONG_CODES} wrong passcodes in a row: passcodes refused for ${minutes} minutes`);
+    this.log.info('Wrong passcodes; refusing them for a while', { accountId: this.repo.accountId });
+    throw new UserError('PASSCODE_WAIT', `That passcode isn't right either. After ${MAX_WRONG_CODES} wrong ones in a row, wait ${minutes} minutes before trying again.`);
+  }
+
+  // ── switching ────────────────────────────────────────────────────────────
+
+  /**
+   * `passcode`: the target's code, when it's locked. An unlock is good for this
+   * switch only. `via` says where it was entered, for the activity log.
+   */
+  switchTo(profileId, { passcode = null, via = 'web' } = {}) {
+    return this.lock.run(() => this.doSwitch(profileId, { passcode, via }));
+  }
+
+  async doSwitch(profileId, { passcode = null, via = 'web' } = {}) {
     const account = this.requireAccount();
     const state = this.repo.getState();
     const target = this.repo.getProfileRow(profileId);
@@ -952,9 +1008,14 @@ export class ProfilesService {
 
     // 1. A half-finished switch comes first, so it isn't hidden behind "already in use".
     this.assertNoOpenJournal();
-    // Idempotent: Stremio can request the stream more than once.
+    // Idempotent: Stremio can request the stream more than once. The profile in use needs no code.
     if (state.active_profile_id === profileId) {
       return { alreadyActive: true, profile: this.repo.getProfile(profileId), warnings: [] };
+    }
+    // A locked profile asks for its code every time (switching away from one never does).
+    if (target.passcode_hash) {
+      await this.verifyPasscode(target, passcode);
+      this.repo.logActivity('unlock', `Unlocked "${target.name}" ${via === 'stremio' ? 'from Stremio' : 'on the web page'}`);
     }
 
     // 2-4. Valid sign-in, same account, target decodes cleanly. No writes yet.
@@ -1537,11 +1598,16 @@ export class ProfilesService {
         throw err;
       }
     };
+    // A passcode goes in as its salted hash (never the code), so a profile comes back locked.
+    const exportPasscode = (profileId) => {
+      const hash = this.repo.getPasscodeHash(profileId);
+      return hash ? { passcode_hash: hash } : {};
+    };
     const profiles = this.repo.listProfiles().map((p) => {
       const snap = decode(this.repo.getProfileRow(p.id));
       return {
         name: p.name, avatar_preset: p.avatar_preset, avatar_colour: p.avatar_colour, active: p.id === activeId,
-        created_at: p.created_at, snapshot_taken_at: p.snapshot_taken_at, ...exportPhoto(p.id),
+        created_at: p.created_at, snapshot_taken_at: p.snapshot_taken_at, ...exportPhoto(p.id), ...exportPasscode(p.id),
         ...(snap ? { library: snap.library, addons: snap.addons, notifs: snap.notifs } : { unreadable: true }),
       };
     });
@@ -1620,6 +1686,8 @@ export class ProfilesService {
           if (photo && isPhoto(preset)) preset = photoPreset(photoHash(photo));
           const pid = this.repo.insertProfile({ name, avatarPreset: preset, avatarColour: colour, stremioUserId: account.stremio_user_id, snapshot: snap });
           if (photo) this.repo.setProfilePhoto(pid, photo, photoHash(photo));
+          // Only a hash this build can check; with anything else the profile comes back unlocked.
+          if (isPasscodeHash(p.passcode_hash)) this.repo.setPasscodeHash(pid, p.passcode_hash);
           addedProfiles++;
         }
         for (const { b, snap, at } of newest) {

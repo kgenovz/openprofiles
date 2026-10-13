@@ -8,6 +8,8 @@ const SEEN_EVERY_MS = 60 * 60 * 1000;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_PER_IP = 10;
 const MAX_ATTEMPTS_PER_EMAIL = 5;
+// A sign-in this recent may reset a forgotten profile passcode.
+export const FRESH_SIGNIN_MS = 10 * 60 * 1000;
 
 function parseCookies(header = '') {
   const out = {};
@@ -113,10 +115,15 @@ export function createAuth({ db, config, now = () => Date.now() }) {
       q.touch.run(now(), now() + SESSION_TTL_MS, row.id_hash);
       q.seen.run({ now: now(), id: row.account_id, every: SEEN_EVERY_MS });
     }
-    return { idHash: row.id_hash, accountId: row.account_id, csrf: row.csrf, flash: row.flash };
+    return { idHash: row.id_hash, accountId: row.account_id, csrf: row.csrf, flash: row.flash, createdAt: row.created_at };
   }
 
   return {
+    /** Whether this session's sign-in, with the Stremio password, was in the last few minutes. */
+    fresh(req) {
+      return Boolean(req.session) && now() - req.session.createdAt < FRESH_SIGNIN_MS;
+    },
+
     /** Checks the rate limits before asking Stremio. Returns an error message, or null to go ahead. */
     checkSignInLimits(req, email) {
       const address = String(email || '').trim().toLowerCase();

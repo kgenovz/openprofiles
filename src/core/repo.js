@@ -12,8 +12,9 @@ export const BACKUP_RETENTION = {
   imported: 20,
 };
 
+// Never the passcode hash itself: only whether there is one.
 const PROFILE_META = `id, name, avatar_preset, avatar_colour, library_count, addon_count, notif_count,
-  snapshot_taken_at, stremio_user_id, created_at, photo_hash`;
+  snapshot_taken_at, stremio_user_id, created_at, photo_hash, passcode_hash IS NOT NULL AS has_passcode`;
 const BACKUP_META = `id, kind, label, library_count, addon_count, notif_count, stremio_user_id, created_at, profile_id, edit_kind`;
 const ACTIVITY_KEEP = 200;
 
@@ -186,6 +187,16 @@ export class AccountRepo {
   setProfilePhoto(id, jpeg, hash) {
     this.db.prepare('UPDATE profiles SET photo_enc = ?, photo_hash = ? WHERE id = ? AND account_id = ?')
       .run(jpeg ? this.cipher.encryptJson(jpeg.toString('base64'), 'photo') : null, jpeg ? hash : null, id, this.accountId);
+  }
+
+  /** The profile's passcode hash (core/passcode.js), or null when it isn't locked. */
+  getPasscodeHash(id) {
+    return this.db.prepare('SELECT passcode_hash FROM profiles WHERE id = ? AND account_id = ?').get(id, this.accountId)?.passcode_hash ?? null;
+  }
+
+  /** `hash` null removes the lock. */
+  setPasscodeHash(id, hash) {
+    this.db.prepare('UPDATE profiles SET passcode_hash = ? WHERE id = ? AND account_id = ?').run(hash, id, this.accountId);
   }
 
   countProfiles() {

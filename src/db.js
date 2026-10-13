@@ -301,6 +301,11 @@ const MIGRATIONS = [
   ALTER TABLE accounts ADD COLUMN last_seen_at INTEGER;
   UPDATE accounts SET last_seen_at = COALESCE((SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.account_id = accounts.id), last_login_at);
   `,
+  // Profile passcodes (2026-10-13, core/passcode.js).
+  //   profiles.passcode_hash  a salted scrypt hash of the profile's 4-digit code; NULL: not locked
+  `
+  ALTER TABLE profiles ADD COLUMN passcode_hash TEXT;
+  `,
 ];
 
 export function openDatabase(dataDir, { filename = 'openprofiles.db' } = {}) {

@@ -441,6 +441,32 @@ the name band, backgrounds at half opacity, the web tile embeds it (its CSP allo
 data:`). Picking another picture keeps the photo for later; "Remove the photo" deletes it.
 Exports carry it; imports redraw it.
 
+### Profile passcodes
+
+*Built (2026-10-13)* (migration 12: `profiles.passcode_hash`, `core/passcode.js`). A keep-the-kids-out
+lock, not security: anyone with the Stremio password gets past it.
+
+- **Code:** exactly 4 digits, kept as `s1$<salt>$<scrypt>` (16-byte salt per hash). Pages and
+  the add-on only ever see `has_passcode`. Exports carry the hash; an import keeps it only if it
+  parses, otherwise the profile comes back unlocked.
+- **Switching:** `doSwitch` asks for the target's code after the already-active check (so a
+  repeated stream request for the profile in use never asks) and before any Stremio call. Nothing
+  is remembered: an unlock is that one switch. Switching away never asks. Restore, recovery and
+  the wizard's "switch now" (a new profile has no code) don't go through it.
+- **In Stremio:** a locked profile's stream doesn't switch. It answers Unlock (`externalUrl` and
+  `androidTvUrl` = `/<token>/unlock/<id>`) and the usual Refresh. The unlock page needs no session
+  (the token proves the account; a bad one is the usual 404); its form carries a one-time nonce
+  held in memory (15 min, 20 per account). Success switches, then 303s to `…/done`, which
+  meta-refreshes to the same deep link as Refresh (Library on Android, Home elsewhere) with a
+  Back to Stremio button for browsers that won't follow it. The poster gets a padlock badge.
+- **Web:** Switch on a locked profile goes to `/profiles/:id/unlock`, which posts the code to the
+  same Switch. Edit › Passcode sets one freely; changing or removing needs the current code, or a
+  session signed in within 10 minutes (`auth.fresh`): "Sign in again" there comes back to it.
+- **Wrong codes:** counted per account in memory (`service.wrongCodes`), across every page,
+  checked inside the account's lock so parallel tries can't race past it: 5 in a row refuse codes
+  for 15 minutes; a right one resets. A missing or malformed code isn't a try. A restart forgets
+  the count.
+
 ## Open questions for Kyle
 
 - Default access rule for a self-hosted server: `owner` (first sign-in claims it) is the plan.

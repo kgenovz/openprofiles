@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Profile passcodes:** a profile can have a 4-digit passcode (**Edit › Passcode**). Switching
+  to it asks for the code on the web page; in Stremio its tile shows a padlock, and opening it
+  offers **Unlock** (a page in the browser that switches, then goes back to Stremio) and
+  **Refresh**. Changing or removing a code needs the current one, or a fresh sign-in with the
+  Stremio password. 5 wrong codes in a row wait 15 minutes. "Download everything" keeps the lock.
+  The database gains a column (applied on start).
+
 ## 1.1.1 (2026-10-13)
 
 - **Watching on another device during a switch:** a title goes back to the profile that was

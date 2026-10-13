@@ -104,6 +104,14 @@ function checkBadge(cx, cy, r) {
     `<path d="M${cx - 14 * s},${cy + 1 * s}l${11 * s},${11 * s}l${19 * s},-${20 * s}" fill="none" stroke="#14141a" stroke-width="${8 * s}" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
 
+/** A padlock on a white disc, for a profile with a passcode (drawn on a 60 px badge, like the check). */
+function lockBadge(cx, cy, r) {
+  const s = r / 30;
+  return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#ffffff"/>` +
+    `<path d="M${cx - 7 * s},${cy - 2 * s}v${-6 * s}a${7 * s},${7 * s} 0 0 1 ${14 * s},0v${6 * s}" fill="none" stroke="#14141a" stroke-width="${4.5 * s}" stroke-linecap="round"/>` +
+    `<rect x="${cx - 12 * s}" y="${cy - 3 * s}" width="${24 * s}" height="${18 * s}" rx="${3.5 * s}" fill="#14141a"/>`;
+}
+
 const svgDoc = (w, h, body) => `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${body}</svg>`;
 
 const png = (svg) => sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer();
@@ -142,7 +150,8 @@ export function avatarTileSvg({ name, colour, avatar, size = 256, photo = null }
   return svgDoc(size, size, `<rect width="${size}" height="${size}" fill="${colour}"/>${face}`);
 }
 
-export function posterSvg({ name, colour, active, avatar = 'initial', photo = null }) {
+/** `locked`: the profile has a passcode, shown as a small padlock in the top-left corner. */
+export function posterSvg({ name, colour, active, avatar = 'initial', photo = null, locked = false }) {
   const W = POSTER_SIZE;
   const bandH = Math.round(W * 0.22);
   // A photo fills the whole tile, under the name band.
@@ -157,6 +166,7 @@ export function posterSvg({ name, colour, active, avatar = 'initial', photo = nu
     fitted.text ? `<path d="${centredLine(fitted.text, 700, fitted.size, W / 2, W - bandH / 2)}" fill="#ffffff"/>` : '',
     active ? `<rect x="${ring / 2}" y="${ring / 2}" width="${W - ring}" height="${W - ring}" fill="none" stroke="#ffffff" stroke-width="${ring}"/>` : '',
     active ? checkBadge(W - W * 0.06 - W * 0.1, W * 0.06 + W * 0.1, W * 0.1) : '',
+    locked ? lockBadge(W * 0.06 + W * 0.07, W * 0.06 + W * 0.07, W * 0.07) : '',
   ].join(''));
 }
 

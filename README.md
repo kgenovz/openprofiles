@@ -48,7 +48,8 @@ Things to know:
   Episodes marked watched on that device after the switch may need marking again. See the
   known limitation below for when it can't tell who was watching.
 - **Opening a profile in the Switch profile row switches to it.** Stremio asks for the profile's
-  "stream" as soon as its page opens, and that request is the switch.
+  "stream" as soon as its page opens, and that request is the switch. A profile with a
+  [passcode](#passcodes) asks for it first.
 
 ### Known limitation: watching during a switch
 
@@ -274,6 +275,24 @@ profile. Nothing changes in Stremio until you switch to that profile or restore 
 Both StremShare export formats are read (`format: "stremshare-account-backup"` v1, and the
 older `schemaVersion: 1` files). A file from a different Stremio account needs an extra
 confirmation.
+
+## Passcodes
+
+Any profile can have a 4-digit passcode: **Edit › Passcode**. Switching to it then asks for the
+code, on the web page and in Stremio. Opening a locked profile in the Switch profile row doesn't
+switch; it offers **Unlock**, which opens a page in the browser to enter the code (that switches,
+then goes back to Stremio), and **Refresh**.
+
+- **On a TV** (or anything without a browser): unlock the profile on your phone, from its Switch
+  profile row or the OpenProfiles web page, then press **Refresh** on the TV.
+- An unlock is good for one switch: switching away and back asks again. Switching away from a
+  locked profile never asks.
+- Changing or removing a passcode needs the current one. Forgot it? Signing in again with the
+  Stremio password lets you set a new one without it, for 10 minutes.
+- After 5 wrong codes in a row (counted per account, on every page), codes are refused for 15
+  minutes.
+- It keeps the kids out; it isn't real security. Anyone with the Stremio password can get around
+  it. Only a salted hash of the code is kept, and it goes into "Download everything".
 
 ## Profile pictures
 

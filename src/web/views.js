@@ -92,7 +92,8 @@ function postButton({ action, csrf, label, style = '', confirm, disabled = false
 }
 
 const pictureVersion = (p) => crypto.createHash('sha1').update(`${p.name}|${p.avatar_colour}|${p.avatar_preset}`).digest('hex').slice(0, 8);
-const avatarUrl = (p) => `/avatars/profile/${p.id}.svg?v=${pictureVersion(p)}`;
+/** The profile's picture tile. The unlock page (no session) gets it under the add-on token, as `prefix`. */
+export const avatarUrl = (p, prefix = '') => `${prefix}/avatars/profile/${p.id}.svg?v=${pictureVersion(p)}`;
 
 function previewSrc(avatar, p) {
   return `/avatars/preview.svg?${new URLSearchParams({ avatar, colour: p.avatar_colour, name: p.name })}`;
@@ -172,8 +173,9 @@ function colourPicker(name, selected) {
 /**
  * `tab` highlights a section of the signed-in navigation; without `csrf` the header is bare (sign-in, errors).
  * `site`: the server's name, colours, logo and notices from the Server tab, and whether the viewer runs it.
+ * `head`: anything more for the page's head.
  */
-export function layout({ title, body, account, csrf, tab = null, wide = false, site = DEFAULT_SITE }) {
+export function layout({ title, body, account, csrf, tab = null, wide = false, site = DEFAULT_SITE, head = '' }) {
   const logo = `/logo.png${site.logoVersion ? `?v=${site.logoVersion}` : ''}`;
   const tabs = site.admin ? [...TABS, ADMIN_TAB] : TABS;
   return html`<!doctype html>
@@ -190,6 +192,7 @@ export function layout({ title, body, account, csrf, tab = null, wide = false, s
   <link rel="stylesheet" href="/static/app.css?v=${ASSET_VERSION}">
   ${site.accent ? html`<link rel="stylesheet" href="/theme.css?v=${site.themeVersion ?? ''}">` : ''}
   <script src="/static/app.js?v=${ASSET_VERSION}" defer></script>
+  ${head}
 </head>
 <body>
   <header class="top">
@@ -243,8 +246,11 @@ function undoBanner(undo, csrf) {
 }
 
 /** From the "Sign in with Stremio" board of the Phase 2 design. */
-/** `site.shared`: anyone (or a list) can sign in here, so say who runs it and what it keeps. */
-export function signInPage({ site = DEFAULT_SITE, error, notice, email = '', again = false } = {}) {
+/**
+ * `site.shared`: anyone (or a list) can sign in here, so say who runs it and what it keeps.
+ * `passcodeFor`: signing in again to reset that profile's forgotten passcode; it opens next.
+ */
+export function signInPage({ site = DEFAULT_SITE, error, notice, email = '', again = false, passcodeFor = null } = {}) {
   const steps = [
     html`Sign in with Stremio. Your account as it is now becomes your <strong>Original</strong> profile, and a permanent backup of it is kept.`,
     html`Make more profiles: a name and picture, the add-ons each one should have.`,
@@ -261,10 +267,13 @@ export function signInPage({ site = DEFAULT_SITE, error, notice, email = '', aga
       </section>
       <section class="card signin-card">
         <h2>${again ? 'Sign in to Stremio again' : 'Sign in with Stremio'}</h2>
-        ${again ? html`<p class="hint">Stremio signed ${site.name} out. Sign in again; your profiles are all still here.</p>` : ''}
+        ${again ? html`<p class="hint">${passcodeFor
+          ? 'Then you can set a new passcode without the old one, for the next 10 minutes.'
+          : html`Stremio signed ${site.name} out. Sign in again; your profiles are all still here.`}</p>` : ''}
         ${notice ? html`<div class="flash flash-ok">${icon.check}<p>${notice}</p></div>` : ''}
         ${error ? html`<div class="flash flash-error" role="alert">${icon.alert}<p>${error}</p></div>` : ''}
         <form method="post" action="/signin" class="stack">
+          ${passcodeFor ? html`<input type="hidden" name="passcodeFor" value="${passcodeFor}">` : ''}
           <label>Stremio email <input type="email" name="email" value="${email}" autocomplete="username" required ${email ? '' : 'autofocus'}></label>
           <label>Stremio password <input type="password" name="password" autocomplete="current-password" required ${email ? 'autofocus' : ''}></label>
           <button type="submit" class="primary">Sign in</button>
@@ -309,7 +318,7 @@ function profileCard(p, { active, csrf, locked, editing }) {
     </div>
     <div class="profile-body">
       <div>
-        <h3>${p.name}</h3>
+        <h3>${p.name}${p.has_passcode ? html` ${icon.lock}<span class="sr-only">(has a passcode)</span>` : ''}</h3>
         <p class="hint">${counts(p, { notifs: false })}</p>
       </div>
       <div class="profile-actions">
@@ -347,9 +356,36 @@ function getStarted({ profiles, addon }) {
   </section>`;
 }
 
-function profileEditor(d, { csrf, locked }) {
+/** A 4-digit passcode field. Masked: whoever it keeps out may be watching it typed. */
+const codeInput = (name, { required = true, autofocus = false } = {}) => html`<input type="password" name="${name}" class="code-input"
+  inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" ${required ? 'required' : ''} ${autofocus ? 'autofocus' : ''}>`;
+
+/**
+ * Lock or unlock the profile. Changing or removing a passcode asks for the
+ * current one, except just after a fresh sign-in (`fresh`), which is how a
+ * forgotten one is reset.
+ */
+function passcodeSection(p, { csrf, fresh }) {
+  const has = Boolean(p.has_passcode);
+  return html`<div class="editor-section" id="passcode">
+    <h2>Passcode</h2>
+    <p class="hint">${has ? html`${icon.lock}Switching to ${p.name} asks for its 4-digit passcode, here and in Stremio.` : `Make switching to ${p.name} ask for a 4-digit passcode, here and in Stremio.`}</p>
+    <form method="post" action="/profiles/${p.id}/passcode" class="row align-end">
+      ${csrfField(csrf)}
+      ${has && !fresh ? html`<label>Current passcode ${codeInput('current')}</label>` : ''}
+      <label>${has ? 'New passcode' : 'Passcode'} ${codeInput('passcode')}</label>
+      <button type="submit">${has ? 'Change' : 'Lock'}</button>
+      ${has ? html`<button type="submit" name="remove" value="1" formnovalidate>Remove passcode</button>` : ''}
+    </form>
+    ${has ? html`<p class="hint">${fresh
+      ? "You signed in just now, so the current passcode isn't needed."
+      : html`Forgot it? <a href="/signin?again=1&amp;passcode=${p.id}">Sign in again</a> with your Stremio password to set a new one without it.`}</p>` : ''}
+  </div>`;
+}
+
+function profileEditor(d, { csrf, locked, fresh }) {
   const p = d.profile;
-  const sections = [['basics', 'Basics'], ['picture', 'Picture'], ['addons', 'Add-ons'], ['cinemeta', 'Cinemeta'], ['saved', "What's saved"], ['danger', 'Danger zone']];
+  const sections = [['basics', 'Basics'], ['picture', 'Picture'], ['passcode', 'Passcode'], ['addons', 'Add-ons'], ['cinemeta', 'Cinemeta'], ['saved', "What's saved"], ['danger', 'Danger zone']];
   const addonNames = d.addons?.filter((a) => !a.self).map((a) => a.name) ?? [];
   const stat = (label, value) => html`<div><dt>${label}</dt><dd>${value}</dd></div>`;
   return html`<section class="editor" id="edit" aria-label="Editing ${p.name}">
@@ -377,6 +413,8 @@ function profileEditor(d, { csrf, locked }) {
           <button type="submit" class="self-start">Save picture</button>
         </form>
       </div>
+
+      ${passcodeSection(p, { csrf, fresh })}
 
       <div class="editor-section" id="addons">
         <div class="section-head"><h2>Add-ons</h2><a href="/profiles/${p.id}/addons">Manage add-ons</a></div>
@@ -417,7 +455,8 @@ function profileEditor(d, { csrf, locked }) {
   </section>`;
 }
 
-export function profilesPage({ site, csrf, flash, status, addon, undo, editing = null }) {
+/** `fresh`: this session's sign-in was a few minutes ago (a forgotten passcode can be reset). */
+export function profilesPage({ site, csrf, flash, status, addon, undo, editing = null, fresh = false }) {
   const { account, profiles, activeProfileId, openJournal } = status;
   const locked = Boolean(openJournal);
   return layout({
@@ -442,7 +481,53 @@ export function profilesPage({ site, csrf, flash, status, addon, undo, editing =
       </div>
     </section>
 
-    ${editing ? profileEditor(editing, { csrf, locked }) : ''}`,
+    ${editing ? profileEditor(editing, { csrf, locked, fresh }) : ''}`,
+  });
+}
+
+// ── passcodes ────────────────────────────────────────────────────────────────
+
+/**
+ * Asks for a locked profile's passcode before switching to it. Signed in, the
+ * form carries the session's CSRF token (`csrf`); the unlock page Stremio opens
+ * has no session, so its form carries a one-time `nonce` instead. `picture` is
+ * the profile's tile. A profile with no passcode (`locked` false; it was removed
+ * meanwhile) just gets a Switch button.
+ */
+export function passcodePage({ site, account = null, csrf = null, nonce = null, profile, picture, action, error = null, locked = true, cancel = null }) {
+  return layout({
+    site,
+    title: `Switch to ${profile.name}`,
+    account,
+    csrf,
+    tab: csrf ? 'profiles' : null,
+    body: html`<section class="card narrow unlock">
+      <img class="unlock-pic" src="${picture}" alt="" width="96" height="96">
+      <h1 class="h2">${locked ? html`${icon.lock}${profile.name} is locked` : profile.name}</h1>
+      ${error ? html`<div class="flash flash-error" role="alert">${icon.alert}<p>${error}</p></div>` : ''}
+      <form method="post" action="${action}" class="stack">
+        ${csrf ? csrfField(csrf) : html`<input type="hidden" name="nonce" value="${nonce}">`}
+        ${locked ? html`<label>Passcode ${codeInput('passcode', { autofocus: true })}</label>` : ''}
+        <button type="submit" class="primary">${locked ? 'Unlock' : `Switch to ${profile.name}`}</button>
+      </form>
+      ${cancel ? html`<p><a href="${cancel}">Cancel</a></p>` : ''}
+    </section>`,
+  });
+}
+
+/**
+ * After unlocking from Stremio: back into the app on its own (the same deep
+ * link as Refresh, `target`), with a button for when the browser won't follow it.
+ */
+export function unlockedPage({ site, profile, target, switched = true }) {
+  return layout({
+    site,
+    title: profile.name,
+    head: html`<meta http-equiv="refresh" content="0;url=${target}">`,
+    body: html`<section class="card narrow unlock">
+      <h1 class="h2">${switched ? `Switched to ${profile.name}` : `${profile.name} is in use`}</h1>
+      <a class="button primary" href="${target}">Back to Stremio</a>
+    </section>`,
   });
 }
 
@@ -1324,6 +1409,7 @@ export function privacyPage({ site = DEFAULT_SITE } = {}) {
       <h2 class="h3">Kept as is</h2>
       <ul>
         <li>Your Stremio email and account id, and your profiles' names, colours and which picture each shows.</li>
+        <li>Profile passcodes, as a salted hash only: never the code itself.</li>
         <li>Where you're signed in here: the description your browser sends (browser and device type), and when it was last used.</li>
         <li>A list of what you did here (switches, edits, backups), the last 200 entries.</li>
       </ul>

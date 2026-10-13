@@ -3,17 +3,18 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createAddonRouter } from '../addon/routes.js';
+import { REDIRECT_TARGETS, autoRefreshTarget, createAddonRouter } from '../addon/routes.js';
 import { LOGO_UPLOAD_MAX, PHOTO_UPLOAD_MAX, avatarTileSvg, normaliseLogo, normalisePhoto } from '../addon/art.js';
 import { isPhoto, isValidAvatar } from '../addon/avatars.js';
 import { AVATAR_COLOURS, BIN_DAYS, DEFAULT_COLOUR, UserError, userMessageOf } from '../core/service.js';
 import { SECTIONS, Settings } from '../core/settings.js';
 import { serverStats } from '../core/stats.js';
+import { randomToken } from '../crypto.js';
 import { createAuth } from './auth.js';
 import { themeCss } from './theme.js';
 import {
-  accountPage, addonManagerPage, adminPage, backupsPage, errorPage, installPage, managerAddonRow, privacyPage, profilesPage,
-  restorePreviewPage, signInPage, wizardAddonRow, wizardPage,
+  accountPage, addonManagerPage, adminPage, avatarUrl, backupsPage, errorPage, installPage, managerAddonRow, passcodePage, privacyPage, profilesPage,
+  restorePreviewPage, signInPage, unlockedPage, wizardAddonRow, wizardPage,
 } from './views.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,18 @@ const idParam = (req) => {
   const id = Number(req.params.id);
   return Number.isSafeInteger(id) && id > 0 ? id : -1;
 };
+
+/** A profile id from a query or form field, or null. */
+const profileIdOf = (value) => {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+};
+
+// A form's passcode turned away (missing, wrong, or too many wrong): the passcode page asks again.
+const PASSCODE_REFUSALS = { PASSCODE_NEEDED: 400, BAD_PASSCODE: 400, WRONG_PASSCODE: 403, PASSCODE_WAIT: 429 };
+// How long an unlock page's form stays good, and how many open ones an account can have.
+const UNLOCK_NONCE_MS = 15 * 60 * 1000;
+const UNLOCK_NONCES_PER_ACCOUNT = 20;
 
 /** A request path fit for the log: add-on links carry the account's secret token as a segment. */
 const logPath = (p) => String(p).replace(/[A-Za-z0-9_-]{20,}/g, '…');
@@ -136,7 +149,7 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     const again = req.query.again === '1';
     if (req.session && !again) return res.redirect(303, '/configure');
     const notice = req.query.deleted === '1' ? 'Your OpenProfiles account and everything saved for it were deleted. Your Stremio account is as it was.' : null;
-    return sendPage(res, signInPage({ again, notice, site: site() }));
+    return sendPage(res, signInPage({ again, notice, site: site(), passcodeFor: again ? profileIdOf(req.query.passcode) : null }));
   });
   const ownOrigin = (() => {
     try {
@@ -174,10 +187,13 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
         ? { type: 'ok', text: 'Welcome! Your account as it is now is saved as your "Original" profile, with a permanent backup.', details: warnings }
         : warnings.length ? { type: 'ok', text: 'Signed in.', details: warnings } : null;
       auth.startSession(req, res, accountId, email, flash);
-      return res.redirect(303, '/configure');
+      // Signed in again to reset a forgotten passcode: straight back to it.
+      const passcodeFor = profileIdOf(req.body?.passcodeFor);
+      return res.redirect(303, passcodeFor ? `/profiles/${passcodeFor}#passcode` : '/configure');
     } catch (err) {
       if (!err.userMessage) log.error('Sign-in failed', { error: err.message });
-      return sendPage(res, signInPage({ error: userMessageOf(err), email, site: site() }), err.kind === 'auth' ? 401 : 400);
+      const passcodeFor = profileIdOf(req.body?.passcodeFor);
+      return sendPage(res, signInPage({ error: userMessageOf(err), email, site: site(), again: Boolean(passcodeFor), passcodeFor }), err.kind === 'auth' ? 401 : 400);
     }
   });
 
@@ -298,18 +314,62 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     if (!req.service.repo.getProfile(id)) return notFound(res, 'That profile no longer exists.', req);
     const status = req.service.status();
     return sendPage(res, profilesPage({
-      ...page(req), status, addon: req.service.addonInfo(), undo: undoFor(req), editing: req.service.profileDetails(id),
+      ...page(req), status, addon: req.service.addonInfo(), undo: undoFor(req), editing: req.service.profileDetails(id), fresh: auth.fresh(req),
     }));
   });
 
-  r.post('/profiles/:id/switch', action(async (req) => {
-    const result = await req.service.switchTo(idParam(req));
-    if (result.alreadyActive) return { text: `"${result.profile.name}" is already in use.` };
+  /** A locked profile's passcode page, signed in: it posts to the profile's Switch. */
+  const sendPasscodePage = (req, res, p, error = null, status = 200) => sendPage(res, passcodePage({
+    ...page(req), profile: p, picture: avatarUrl(p), action: `/profiles/${p.id}/switch`, error, cancel: '/configure',
+  }), status);
+
+  r.get('/profiles/:id/unlock', (req, res) => {
+    const p = req.service.repo.getProfile(idParam(req));
+    if (!p) return notFound(res, 'That profile no longer exists.', req);
+    if (!p.has_passcode || p.id === req.service.repo.getState()?.active_profile_id) return res.redirect(303, '/configure');
+    return sendPasscodePage(req, res, p);
+  });
+
+  // A locked profile's Switch button posts without a code: that opens its passcode page first.
+  r.post('/profiles/:id/switch', async (req, res) => {
+    const id = idParam(req);
+    const passcode = typeof req.body.passcode === 'string' ? req.body.passcode : null;
+    try {
+      const result = await req.service.switchTo(id, { passcode, via: 'web' });
+      auth.setFlash(req, result.alreadyActive
+        ? { type: 'ok', text: `"${result.profile.name}" is already in use.` }
+        : {
+          type: 'ok',
+          text: `Switched to "${result.profile.name}". Click back into Stremio and it refreshes (Stremio 5). Other apps: close and reopen them.`,
+          details: result.warnings,
+        });
+    } catch (err) {
+      const p = Object.hasOwn(PASSCODE_REFUSALS, err.code) ? req.service.repo.getProfile(id) : null;
+      if (p) {
+        if (passcode === null && err.code === 'PASSCODE_NEEDED') return res.redirect(303, `/profiles/${id}/unlock`);
+        return sendPasscodePage(req, res, p, err.userMessage, PASSCODE_REFUSALS[err.code]);
+      }
+      if (!err.userMessage) log.error('Unexpected error', { path: logPath(req.path), error: err.message, stack: err.stack });
+      auth.setFlash(req, { type: 'error', text: userMessageOf(err) });
+    }
+    return res.redirect(303, '/configure');
+  });
+
+  r.post('/profiles/:id/passcode', action(async (req) => {
+    const remove = req.body.remove === '1';
+    const { profile, kind } = await req.service.setPasscode(idParam(req), {
+      code: remove ? null : String(req.body.passcode ?? ''),
+      current: typeof req.body.current === 'string' ? req.body.current : null,
+      fresh: auth.fresh(req),
+    });
     return {
-      text: `Switched to "${result.profile.name}". Click back into Stremio and it refreshes (Stremio 5). Other apps: close and reopen them.`,
-      details: result.warnings,
+      text: {
+        set: `Locked ${profile.name}. Switching to it now asks for the passcode.`,
+        change: `Changed ${profile.name}'s passcode.`,
+        remove: `Removed ${profile.name}'s passcode.`,
+      }[kind] ?? `${profile.name} has no passcode.`,
     };
-  }));
+  }, (req) => `/profiles/${idParam(req)}#passcode`));
 
   r.post('/profiles/:id/save', action(async (req) => {
     const { profile, notifsSaved } = await req.service.saveNow();
@@ -621,19 +681,22 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     .type('image/svg+xml')
     .send(svg);
 
-  r.get('/avatars/profile/:id.svg', (req, res) => {
-    const p = req.service.repo.getProfile(idParam(req));
+  /** A profile's picture tile, for `service`'s account. */
+  const sendProfileTile = (res, service, id) => {
+    const p = service.repo.getProfile(id);
     if (!p) return res.status(404).end();
     let photo = null;
     if (isPhoto(p.avatar_preset)) {
       try {
-        photo = req.service.repo.getProfilePhoto(p.id);
+        photo = service.repo.getProfilePhoto(p.id);
       } catch {
         // unreadable: the letter instead
       }
     }
     return sendSvg(res, avatarTileSvg({ name: p.name, colour: p.avatar_colour, avatar: p.avatar_preset, photo }));
-  });
+  };
+
+  r.get('/avatars/profile/:id.svg', (req, res) => sendProfileTile(res, req.service, idParam(req)));
 
   // The photo on its own, for the picture picker. The hash in the link changes with the photo.
   r.get('/avatars/profile/:id/photo.jpg', (req, res) => {
@@ -705,6 +768,96 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     settings.setLogo(null);
     return { text: 'Back to the drawn logo.' };
   }, '/admin#look'));
+
+  // ── the unlock page Stremio opens for a locked profile ─────────────────────
+  //
+  // No sign-in: the add-on token in the link already proves the account, and a
+  // bad one gets the same 404 as any unknown page. With no session to carry a
+  // CSRF token, each form carries a one-time nonce, kept in memory for
+  // UNLOCK_NONCE_MS (a restart only means entering the code again).
+
+  const unlockNonces = new Map(); // account id → Map(nonce → { profileId, expiresAt })
+
+  const issueNonce = (accountId, profileId) => {
+    const now = Date.now();
+    const mine = unlockNonces.get(accountId) ?? new Map();
+    for (const [n, e] of mine) if (e.expiresAt <= now) mine.delete(n);
+    while (mine.size >= UNLOCK_NONCES_PER_ACCOUNT) mine.delete(mine.keys().next().value);
+    const nonce = randomToken(18);
+    mine.set(nonce, { profileId, expiresAt: now + UNLOCK_NONCE_MS });
+    unlockNonces.set(accountId, mine);
+    return nonce;
+  };
+
+  /** Spends the nonce: true when it was this account's, for this profile, and still good. */
+  const takeNonce = (accountId, profileId, nonce) => {
+    const mine = unlockNonces.get(accountId);
+    const entry = typeof nonce === 'string' ? mine?.get(nonce) : null;
+    if (!entry) return false;
+    mine.delete(nonce);
+    return entry.profileId === profileId && entry.expiresAt > Date.now();
+  };
+
+  /** The account and profile an unlock link names, or null after answering 404. */
+  const unlockTarget = (req, res) => {
+    const hit = accounts.byAddonToken(req.params.token);
+    const profile = hit?.service.repo.getProfile(idParam(req));
+    if (!profile) {
+      sendPage(res, errorPage({ site: site(), status: 404, message: "There's nothing here." }), 404);
+      return null;
+    }
+    accounts.noteAddonUse(hit.account.id);
+    const active = hit.service.repo.getState()?.active_profile_id === profile.id;
+    return { ...hit, profile, active, token: req.params.token };
+  };
+
+  const sendUnlockPage = (res, { account, profile, token }, error = null, status = 200) => sendPage(res, passcodePage({
+    site: site(),
+    nonce: issueNonce(account.id, profile.id),
+    profile,
+    picture: avatarUrl(profile, `/${token}`),
+    action: `/${token}/unlock/${profile.id}`,
+    error,
+    locked: Boolean(profile.has_passcode),
+  }), status);
+
+  // Back into Stremio by the same deep link as the Refresh stream: Library on Android, Home elsewhere.
+  const sendUnlocked = (req, res, { profile }, switched) => sendPage(res, unlockedPage({
+    site: site(), profile, switched, target: REDIRECT_TARGETS[autoRefreshTarget(req.get('user-agent'))],
+  }));
+
+  app.get('/:token/unlock/:id', (req, res) => {
+    const hit = unlockTarget(req, res);
+    if (!hit) return undefined;
+    return hit.active ? sendUnlocked(req, res, hit, false) : sendUnlockPage(res, hit);
+  });
+
+  app.post('/:token/unlock/:id', async (req, res) => {
+    const hit = unlockTarget(req, res);
+    if (!hit) return undefined;
+    if (!takeNonce(hit.account.id, hit.profile.id, req.body?.nonce)) {
+      return sendUnlockPage(res, hit, 'This page had expired. Enter the passcode again.', 403);
+    }
+    try {
+      await hit.service.switchTo(hit.profile.id, { passcode: String(req.body?.passcode ?? ''), via: 'stremio' });
+    } catch (err) {
+      if (!err.userMessage) log.error('Switch from the unlock page failed', { error: err.message });
+      return sendUnlockPage(res, hit, userMessageOf(err), PASSCODE_REFUSALS[err.code] ?? 400);
+    }
+    // A page of its own, so reloading it doesn't post again.
+    return res.redirect(303, `/${hit.token}/unlock/${hit.profile.id}/done`);
+  });
+
+  app.get('/:token/unlock/:id/done', (req, res) => {
+    const hit = unlockTarget(req, res);
+    if (!hit) return undefined;
+    return hit.active ? sendUnlocked(req, res, hit, true) : res.redirect(303, `/${hit.token}/unlock/${hit.profile.id}`);
+  });
+
+  app.get('/:token/avatars/profile/:id.svg', (req, res) => {
+    const hit = accounts.byAddonToken(req.params.token);
+    return hit ? sendProfileTile(res, hit.service, idParam(req)) : res.status(404).end();
+  });
 
   app.use(r);
 

@@ -242,6 +242,12 @@ input:not([type="radio"]):not([type="checkbox"]) {
   width: 100%;
 }
 .row > input { width: auto; flex: 1 1 180px; }
+input[type="password"].code-input { width: 8.5ch; font-size: 20px; letter-spacing: 0.3em; text-align: center; }
+
+/* Passcode pages */
+.unlock { display: grid; gap: 14px; justify-items: center; text-align: center; }
+.unlock .stack { justify-items: center; }
+.unlock-pic { border-radius: 20px; }
 
 button, .button, .icon-button {
   font: inherit;
