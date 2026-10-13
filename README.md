@@ -44,9 +44,32 @@ Things to know:
 - **Someone still watching on another device during a switch keeps their progress.** Stremio
   saves the title they're playing back into the account as it goes, so for a while it shows in
   the new profile's Continue Watching too. About 10 minutes after they stop, OpenProfiles moves
-  that progress to the profile that was watching and takes the title back out of the new one. Episodes marked watched on that device after the switch may need marking again.
+  that progress to the profile that was watching and takes the title back out of the new one.
+  Episodes marked watched on that device after the switch may need marking again. See the
+  known limitation below for when it can't tell who was watching.
 - **Opening a profile in the Switch profile row switches to it.** Stremio asks for the profile's
   "stream" as soon as its page opens, and that request is the switch.
+
+### Known limitation: watching during a switch
+
+OpenProfiles can't see who is holding the remote. It decides who is watching from the
+positions Stremio saves, and when that isn't clear-cut, the profile in use keeps the title. The
+rules never take someone's own viewing away, but they do allow a little crossover:
+
+- **A title started just before a switch** may not be known to Stremio yet. It shows in the
+  new profile's Continue Watching for a few minutes, until OpenProfiles spots it (about 4 minutes
+  after the switch) and moves it back once playback stops.
+- **When both profiles watch the same title around a switch** (the same movie, or the same
+  show at nearby episodes), OpenProfiles can't tell the two apart. The profile in use keeps it,
+  and the other profile may miss some progress there.
+- **A device clock that's well off**, or skipping far ahead in a title the other profile had
+  only just started, can make one profile's viewing look like the other's, so it ends up in the
+  other profile.
+
+This is the accepted behaviour for now. Usually the worst case is a title sitting in the wrong
+Continue Watching for a few minutes, or a profile missing some progress. Nothing is ever
+deleted: at worst it ends up in the other profile. Switching while nothing is playing avoids
+all of it.
 
 ### Known limitation: stray "new episode" cards
 
