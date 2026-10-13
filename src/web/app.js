@@ -71,7 +71,7 @@ function renamesFromForm(body) {
  * `settings` (core/settings.js) holds what the Server tab changes; the pages
  * read it on every request, so a save shows at once.
  */
-export function createApp({ config, db, accounts, log, settings = new Settings({ db }), startedAt = Date.now(), uploadReadMs = 60 * 1000 }) {
+export function createApp({ config, db, accounts, log, settings = new Settings({ db }), startedAt = Date.now(), uploadReadMs = 2 * 60 * 1000 }) {
   const app = express();
   const auth = createAuth({ db, config });
   const themeVersion = () => crypto.createHash('sha1').update(themeCss(settings.branding())).digest('hex').slice(0, 10);

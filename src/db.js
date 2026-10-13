@@ -292,14 +292,14 @@ const MIGRATIONS = [
   //                               already, so nobody signing up later inherits the server.
   //   accounts.last_seen_at       when the pages were last visited (written at most hourly). Session
   //                               rows go when they expire or on sign-out, so they can't say it.
-  //                               Accounts already here start from now, like last_addon_at.
+  //                               Accounts already here start from their latest session or sign-in.
   `
   INSERT INTO meta (key, value)
     SELECT 'owner_stremio_user_id', COALESCE((SELECT a.stremio_user_id FROM accounts a WHERE a.id = CAST(m.value AS INTEGER)), '')
     FROM meta m WHERE m.key = 'owner_account_id';
   DELETE FROM meta WHERE key = 'owner_account_id';
   ALTER TABLE accounts ADD COLUMN last_seen_at INTEGER;
-  UPDATE accounts SET last_seen_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+  UPDATE accounts SET last_seen_at = COALESCE((SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.account_id = accounts.id), last_login_at);
   `,
 ];
 

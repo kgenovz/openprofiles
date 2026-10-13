@@ -358,16 +358,20 @@ describe('unused accounts', () => {
     assert.equal(settings.get('removeUnusedDays'), 180);
   });
 
-  it('accounts from before this was recorded start counting from the upgrade', () => {
+  it('accounts from before this was recorded: add-on use starts from the upgrade, visits from their latest session or sign-in', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
     migrate(db, { upTo: 8 });
-    db.prepare(`INSERT INTO accounts (id, stremio_user_id, stremio_email, auth_key_enc, addon_token, created_at, last_login_at)
-      VALUES (1, 'u1', 'p1@example.com', x'00', 'token-1-xxxxxxxxxxxxxxxx', 1, 1)`).run();
+    for (const id of [1, 2]) {
+      db.prepare(`INSERT INTO accounts (id, stremio_user_id, stremio_email, auth_key_enc, addon_token, created_at, last_login_at)
+        VALUES (?, ?, ?, x'00', ?, 1, 100)`).run(id, `u${id}`, `p${id}@example.com`, `token-${id}-xxxxxxxxxxxxxxxx`);
+    }
+    db.prepare(`INSERT INTO sessions (id_hash, account_id, csrf, created_at, last_seen_at, expires_at)
+      VALUES (x'01', 1, 'c', 100, 5000, 99999)`).run();
     migrate(db);
-    const row = db.prepare('SELECT last_addon_at, last_seen_at FROM accounts').get();
-    assert.ok(row.last_addon_at > Date.now() - 60_000);
-    assert.ok(row.last_seen_at > Date.now() - 60_000);
+    const rows = db.prepare('SELECT id, last_addon_at, last_seen_at FROM accounts ORDER BY id').all();
+    assert.ok(rows.every((r) => r.last_addon_at > Date.now() - 60_000));
+    assert.deepEqual(rows.map((r) => r.last_seen_at), [5000, 100], 'the latest session, else the last sign-in');
   });
 });
 
