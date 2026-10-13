@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 (2026-10-13)
 
 - **Profile passcodes:** a profile can have a 4-digit passcode (**Edit › Passcode**). Switching
   to it asks for the code on the web page; in Stremio its tile shows a padlock, and opening it
