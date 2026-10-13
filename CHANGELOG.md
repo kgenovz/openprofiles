@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Backups page:** each group shows its newest 5, with the rest under "Show older".
+
 ## 1.1.0 (2026-10-12)
 
 - **Watching on another device during a switch:** the title's progress goes to the profile that

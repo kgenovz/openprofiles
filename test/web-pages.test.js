@@ -154,6 +154,17 @@ describe('web pages', () => {
     assert.doesNotMatch(await (await fetch(`${base}/signin?again=1`)).text(), /A shared server/);
   });
 
+  it('the backups page shows the newest few of each group and folds the rest', async () => {
+    const service = ctx.accounts.forAccount(1);
+    for (let i = 1; i <= 7; i++) await service.createBackup(`Mine ${i}`);
+    const page = (await b.request('/backups')).text;
+    const mine = page.slice(page.indexOf('Made by you'));
+    const group = mine.slice(0, mine.indexOf('</details>'));
+    assert.match(group, /Show older \(2\)/);
+    assert.ok(group.indexOf('Mine 7') < group.indexOf('Show older'), 'the newest is shown');
+    assert.ok(group.indexOf('Mine 1') > group.indexOf('Show older'), 'the oldest is folded');
+  });
+
   it('looks up an add-on by link for the page, behind the CSRF check', async () => {
     ctx.web.manifests.set('https://youtube.example/manifest.json', richAddon('YouTube').manifest);
     const noToken = await fetch(`${base}/addons/lookup`, { method: 'POST', headers: { cookie: b.cookie, 'content-type': 'application/json' }, body: '{}' });

@@ -40,9 +40,11 @@ const BACKUP_GROUPS = [
   { title: 'Automatic', keep: 'daily, the last 14 kept', kinds: ['auto'] },
   { title: 'Before changes', keep: 'switches, restores and edits', kinds: ['pre_switch', 'pre_restore', 'pre_change'] },
   { title: 'Made by you', keep: 'the last 10 kept', kinds: ['manual'] },
-  { title: 'Imported', keep: 'the last 10 kept', kinds: ['imported'] },
+  { title: 'Imported', keep: 'the last 20 kept', kinds: ['imported'] },
   { title: 'Setup', keep: 'kept forever', kinds: ['original'] },
 ];
+// Each group shows its newest few; the rest fold under "Show older".
+const BACKUPS_SHOWN = 5;
 
 const REPO_URL = 'https://github.com/kgenovz/openprofiles';
 
@@ -830,18 +832,21 @@ export function backupsPage({ site, csrf, account, flash, backups, bin = [], und
       ${BACKUP_GROUPS.map((g) => {
         const items = backups.filter((b) => g.kinds.includes(b.kind));
         if (!items.length) return '';
+        const row = (b) => html`<li>
+          <span class="list-main"><strong>${b.label}</strong><span class="hint">${when(b.created_at)} · ${counts(b, { notifs: false })}</span></span>
+          <span class="actions">
+            <a href="/backups/${b.id}/restore">Restore…<span class="sr-only"> ${b.label}</span></a>
+            <a href="/backups/${b.id}/download">Download<span class="sr-only"> ${b.label}</span></a>
+            ${b.kind === 'original' ? '' : postButton({ action: `/backups/${b.id}/delete`, csrf, label: html`Delete<span class="sr-only"> ${b.label}</span>`, style: 'link danger', confirm: 'Delete this backup?' })}
+          </span>
+        </li>`;
         return html`<div class="backup-group">
           <h2 class="h3">${g.title} <span class="hint">· ${g.keep}</span></h2>
-          <ul class="list">
-            ${items.map((b) => html`<li>
-              <span class="list-main"><strong>${b.label}</strong><span class="hint">${when(b.created_at)} · ${counts(b, { notifs: false })}</span></span>
-              <span class="actions">
-                <a href="/backups/${b.id}/restore">Restore…<span class="sr-only"> ${b.label}</span></a>
-                <a href="/backups/${b.id}/download">Download<span class="sr-only"> ${b.label}</span></a>
-                ${b.kind === 'original' ? '' : postButton({ action: `/backups/${b.id}/delete`, csrf, label: html`Delete<span class="sr-only"> ${b.label}</span>`, style: 'link danger', confirm: 'Delete this backup?' })}
-              </span>
-            </li>`)}
-          </ul>
+          <ul class="list">${items.slice(0, BACKUPS_SHOWN).map(row)}</ul>
+          ${items.length > BACKUPS_SHOWN ? html`<details class="fold">
+            <summary>Show older (${items.length - BACKUPS_SHOWN})</summary>
+            <ul class="list">${items.slice(BACKUPS_SHOWN).map(row)}</ul>
+          </details>` : ''}
         </div>`;
       })}
     </section>
