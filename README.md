@@ -70,7 +70,7 @@ https.
    | `ACCESS` | no | Who can sign in. `owner` (default): the first Stremio account to sign in owns the server. `list`: only `ALLOWED_ACCOUNTS`. `open`: anyone (a shared instance) |
    | `ALLOWED_ACCOUNTS` | with `list` | Stremio emails or user ids, comma-separated |
    | `MAX_ACCOUNTS` | no | With `open`, the most accounts the server takes |
-   | `REMOVE_UNUSED_DAYS` | no | With `open`, accounts nobody uses for this many days are removed, so they don't hold places forever (default `90`; `0` never). Used means signed in, visited the pages, or Stremio asked its add-on for anything. The owner and `ADMINS` are never removed |
+   | `REMOVE_UNUSED_DAYS` | no | With `open`, accounts nobody uses for this many days are removed, so they don't hold places forever (default `90`; `0` never; otherwise 30 to 3650). Used means signed in, visited the pages, or Stremio asked its add-on for anything. Only days the server was running count, at most 5 go a day, and the owner, `ADMINS` and an account with an unfinished switch are never removed |
    | `LOG_LEVEL` | no | `error`, `warn`, `info` (default) or `debug` |
    | `SECRET_KEY` | no | 32-byte key (64 hex chars) instead of the generated `/data/secret.key` |
    | `PORT` | no | Port inside the container (default `7000`) |
@@ -78,7 +78,7 @@ https.
    | `ALLOW_PRIVATE_ADDONS` | no | `true` lets the add-on manager fetch add-ons on private networks (a home LAN). Off by default |
    | `OPERATOR` | no | On a shared server (`list` or `open`), who runs it; shown on the sign-in and privacy pages |
    | `PRIVACY_NOTE` | no | One more line for the privacy page about your setup, e.g. `The web proxy keeps no access logs.` |
-   | `ADMINS` | no | Stremio emails or user ids that may use the **Server** tab besides the owner (the first account to sign in) |
+   | `ADMINS` | no | Stremio user ids (or emails) that may use the **Server** tab besides the owner (the first account to sign in). Ids are safer: an email can be changed, and whoever gets the address later would run the server |
 
    `ACCESS`, `ALLOWED_ACCOUNTS`, `MAX_ACCOUNTS`, `REMOVE_UNUSED_DAYS`, `LOG_LEVEL`, `OPERATOR`
    and `PRIVACY_NOTE` are starting values: the **Server** tab can change each of them later without a restart (see
@@ -157,6 +157,9 @@ fixes). A 2.0 would need changes by hand, and would only come with a new tag. Da
 
 Whoever signed in first owns the server and gets a **Server** tab (so do any `ADMINS`). Nobody
 else sees it, and it only ever shows counts: nothing on it names or picks out an account.
+The owner is that Stremio account: if they delete their OpenProfiles account, nobody else
+takes over, and signing in again makes them the owner again. List `ADMINS` by Stremio user id
+where you can; emails work too, but an email can change hands.
 
 - **Overview:** accounts (of the limit, new this week, used this week, with the add-on
   installed, unused for 60 days), switches per day this week and any that didn't finish, the

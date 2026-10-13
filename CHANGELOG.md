@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **Owner:** the server's owner is their Stremio account, not an account number. If the owner
+  deletes their account, someone signing up later no longer becomes the owner; the owner signing
+  in again is the owner again. A server whose owner already left upgrades with no owner: name
+  yourself in `ADMINS` to get the Server tab back.
+- **Unused accounts** (`ACCESS=open`): only days the server was running count, so an outage no
+  longer removes everyone at the next start. At most 5 go a day, an account with an unfinished
+  switch is kept, and visiting the pages counts even after that browser signed out.
+- `REMOVE_UNUSED_DAYS` or `MAX_ACCOUNTS` set to something the Server tab can't take now stops
+  the server at start with a message, instead of being ignored.
+- Signing up again after an account was removed points the add-on Stremio still has at the new
+  account (its old link stopped working). "Installed" now means installed with this account's link.
+- A sign-in that says `Origin: null` from a browser without `Sec-Fetch-Site` is refused (our own
+  pages send their real origin).
+- An upload still arriving after a minute is cut off, so it can't keep other uploads waiting.
+  Profile photos and logos over 25 megapixels are refused.
+- README: list `ADMINS` by Stremio user id rather than email.
+
 ## 1.1.0 (2026-10-12)
 
 - **Watching on another device during a switch:** the title's progress goes to the profile that

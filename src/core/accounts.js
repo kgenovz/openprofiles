@@ -77,10 +77,21 @@ export class AccountsService {
     return this.accounts.byId(accountId);
   }
 
-  /** The account that runs the server: the first one ever set up. */
+  /**
+   * The account that runs the server: the Stremio account that set up the first
+   * account ever. It's kept by Stremio user id, because account ids can be used
+   * again: if the owner deletes their account, nobody signing up after inherits
+   * the server, and the owner signing in again owns it again. Null meanwhile.
+   */
   ownerId() {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'owner_account_id'").get();
-    return row ? Number(row.value) : null;
+    const row = this.db.prepare(`SELECT a.id FROM meta m JOIN accounts a ON a.stremio_user_id = m.value
+      WHERE m.key = 'owner_stremio_user_id'`).get();
+    return row ? row.id : null;
+  }
+
+  isOwner(user) {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'owner_stremio_user_id'").get();
+    return Boolean(row?.value) && row.value === user.id;
   }
 
   /** Whether this account runs the server (and sees the Server tab). */
@@ -104,7 +115,7 @@ export class AccountsService {
       }
       const existing = this.accounts.byStremioUserId(user.id);
       const access = this.access();
-      const admin = (existing && existing.id === this.ownerId()) || this.listedAdmin(user);
+      const admin = this.isOwner(user) || this.listedAdmin(user);
       const refusal = accessDecision(access, { user, existing, accountCount: this.accounts.count(), admin });
       if (refusal) {
         this.log.warn('Sign-in refused by the access rule', { mode: access.mode });
@@ -133,14 +144,37 @@ export class AccountsService {
         repo.setActiveProfile(profileId);
         repo.insertBackup({ kind: 'original', label: 'Account as it was at setup', stremioUserId: user.id, snapshot });
         // The first account ever set up runs the server.
-        this.db.prepare("INSERT INTO meta (key, value) VALUES ('owner_account_id', ?) ON CONFLICT (key) DO NOTHING").run(String(id));
+        this.db.prepare("INSERT INTO meta (key, value) VALUES ('owner_stremio_user_id', ?) ON CONFLICT (key) DO NOTHING").run(user.id);
         return id;
       })();
-      this.forAccount(accountId).noteAddons(live.addons);
+      await this.replaceStaleAddon(accountId, authKey, live.addons);
       this.forAccount(accountId).repo.logActivity('signin', 'Account set up: your Stremio account was saved as "Original"');
       this.log.info('Account created', { accountId, libraryItems: snapshot.library.length, addons: snapshot.addons.length });
       return { accountId, created: true, warnings };
     });
+  }
+
+  /**
+   * A new account whose Stremio still has this server's add-on from an account
+   * removed earlier: that link is dead now, so the add-on is pointed at the new
+   * account's. If Stremio refuses the write, the sign-in still goes ahead and
+   * the page offers to install the add-on.
+   */
+  async replaceStaleAddon(accountId, authKey, addons) {
+    const service = this.forAccount(accountId);
+    const { addon_token: token, active_profile_id: profileId } = service.repo.getState();
+    let list = addons;
+    if (this.selfAddon && addons.some((a) => this.selfAddon.isStale(a, token))) {
+      try {
+        const next = service.prepareAddons(addons, profileId);
+        await this.stremio.setAddons(authKey, next);
+        list = next;
+        this.log.info("Pointed an old copy of the add-on at the new account's link", { accountId });
+      } catch (err) {
+        this.log.warn("Couldn't point an old copy of the add-on at the new account's link", { accountId, error: err.message });
+      }
+    }
+    service.noteAddons(list);
   }
 
   /**
@@ -163,16 +197,18 @@ export class AccountsService {
 
   /**
    * Remove the accounts nobody has used since `since` (see USED_SINCE in repo.js),
-   * never the owner or ADMINS. Each is checked again right before it goes, in
-   * case it was used meanwhile. Returns how many were removed.
+   * never the owner or ADMINS, and at most `limit` of them. Each is checked again
+   * right before it goes, in case it was used meanwhile. Returns how many were
+   * removed, and how many more are due (left for the next run by the limit).
    */
-  async removeUnused(since) {
+  async removeUnused(since, { limit = Infinity } = {}) {
+    const due = this.accounts.unusedSince(since).filter((id) => !this.isAdmin(id));
     let removed = 0;
-    for (const id of this.accounts.unusedSince(since)) {
-      if (this.isAdmin(id) || !this.accounts.unusedSince(since).includes(id)) continue;
+    for (const id of due.slice(0, limit)) {
+      if (!this.accounts.unusedSince(since).includes(id)) continue;
       await this.deleteAccount(id, { reason: 'unused' });
       removed++;
     }
-    return removed;
+    return { removed, left: Math.max(0, due.length - limit) };
   }
 }

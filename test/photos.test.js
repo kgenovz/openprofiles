@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import sharp from 'sharp';
-import { normalisePhoto, renderPoster } from '../src/addon/art.js';
+import { normaliseLogo, normalisePhoto, renderPoster } from '../src/addon/art.js';
 import { parseAvatar } from '../src/addon/avatars.js';
 import { silentLogger } from '../src/log.js';
 import { createApp } from '../src/web/app.js';
@@ -26,6 +27,13 @@ describe('profile photos', () => {
     assert.deepEqual([meta.format, meta.width, meta.height], ['jpeg', 512, 512]);
     assert.equal(await normalisePhoto(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')), null);
     assert.equal(await normalisePhoto(Buffer.alloc(0)), null);
+  });
+
+  it('refuses a picture over 25 megapixels before decoding it, however small the file', async () => {
+    const huge = await solid('#e05d0c', 5100, 5000);
+    assert.ok(huge.length < 4 * 1024 * 1024);
+    assert.equal(await normalisePhoto(huge), null);
+    assert.equal(await normaliseLogo(huge), null);
   });
 
   it('one per profile: a new upload replaces the old one and becomes the picture', async () => {
@@ -155,5 +163,37 @@ describe('profile photos on the page', () => {
 
   it("another account's profile can't be given a photo", async () => {
     assert.equal((await upload(await solid('#e05d0c'), 'image/jpeg', 9999)).status, 400);
+  });
+});
+
+describe('one upload at a time', () => {
+  it('a body sent too slowly is cut off, so the next upload gets its turn', async () => {
+    const ctx = await linkedWithKids({ withAddon: true });
+    const config = { publicUrl: PUBLIC_URL, trustProxy: false };
+    const server = createApp({ config, db: ctx.db, accounts: ctx.accounts, settings: ctx.settings, log: silentLogger, uploadReadMs: 300 }).listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const base = `http://127.0.0.1:${server.address().port}`;
+      const browser = new Browser(base);
+      await browser.signIn();
+      const csrf = await browser.csrf();
+      const path = `/profiles/${ctx.kids.id}/photo`;
+      const headers = { cookie: browser.cookie, 'x-csrf-token': csrf, 'content-type': 'image/jpeg' };
+
+      // Says 100 kB are coming, sends 10 bytes, then nothing.
+      const slow = http.request(`${base}${path}`, { method: 'POST', headers: { ...headers, 'content-length': 100_000 } });
+      const cut = new Promise((resolve) => {
+        slow.on('error', resolve);
+        slow.on('response', (res) => res.resume().on('end', resolve));
+      });
+      slow.write(Buffer.alloc(10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const upload = async () => (await fetch(`${base}${path}`, { method: 'POST', headers, body: await solid('#e05d0c') })).status;
+      assert.equal(await upload(), 429, 'the slow one holds the turn');
+      await cut;
+      assert.equal(await upload(), 200);
+    } finally {
+      server.close();
+    }
   });
 });
