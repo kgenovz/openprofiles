@@ -580,8 +580,10 @@ describe('judge', () => {
 
   it("a title started just before the switch: a position past the time since the switch is the owner's", () => {
     assert.equal(judge(record, save(89_000, 74_000)).kind, 'owner');
+    // A second live test: play pressed 5 s before the switch, saved at 180.0 s, 175.1 s after it.
+    assert.equal(judge(record, save(180_013, 175_078)).kind, 'owner');
     assert.equal(judge(record, save(74_000, 74_000)).kind, 'released', 'started right at the switch');
-    assert.equal(judge(record, save(80_000, 74_000)).kind, 'released', 'within the margin');
+    assert.equal(judge(record, save(76_000, 74_000)).kind, 'released', 'within the margin');
     assert.equal(judge(record, save(10 * MIN, 30 * MIN)).kind, 'released');
   });
 

@@ -38,9 +38,11 @@ export const SWEEP_AFTER_MS = 4 * 60 * 1000;
 const REWIND_SLACK_MS = 2 * 60 * 1000;
 // A position this far past the time since the switch proves playback began before it: playing at
 // normal speed can't run ahead of the clock, so someone starting the title after the switch never
-// is. The margin covers a device clock a few seconds behind the server's. It must stay under 15 s:
-// a live test saw a title started 16 s before a switch save 89 s in, 74 s after the switch.
-const BEFORE_SWITCH_MARGIN_MS = 10 * 1000;
+// is. The margin covers a device clock a little behind the server's (clocks sync to within about a
+// second). Live tests: a title started 16 s before a switch saved 89 s in, 74 s after it; one
+// started 5 s before saved 180.0 s in, 175.1 s after (its position matched the time since its play
+// mark to 0.2 s). A margin of 10 s missed the second; 3 s keeps both.
+const BEFORE_SWITCH_MARGIN_MS = 3 * 1000;
 
 export const timeOf = (value) => {
   const t = Date.parse(value ?? '');

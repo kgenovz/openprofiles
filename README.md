@@ -58,7 +58,8 @@ rules never take someone's own viewing away, but they do allow a little crossove
 
 - **A title started just before a switch** may not be known to Stremio yet. It shows in the
   new profile's Continue Watching for a few minutes, until OpenProfiles spots it (about 4 minutes
-  after the switch) and moves it back once playback stops.
+  after the switch) and moves it back once playback stops. One started only a few seconds
+  before the switch can't be told from the new profile starting it, so it stays there.
 - **When both profiles watch the same title around a switch** (the same movie, or the same
   show at nearby episodes), OpenProfiles can't tell the two apart. The profile in use keeps it,
   and the other profile may miss some progress there.
