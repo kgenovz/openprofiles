@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 (2026-10-13)
 
 - **Watching on another device during a switch:** a title goes back to the profile that was
   watching only when it clearly kept playing there; when in doubt, the profile in use keeps it, so
@@ -23,7 +23,8 @@
   pages send their real origin).
 - An upload still arriving after two minutes is cut off, so it can't keep other uploads waiting.
   Profile photos and logos over 25 megapixels are refused.
-- README: list `ADMINS` by Stremio user id rather than email.
+- README: list `ADMINS` by Stremio user id rather than email, and what can still cross over
+  between profiles when someone is watching during a switch (Known limitation).
 
 ## 1.1.0 (2026-10-12)
 
