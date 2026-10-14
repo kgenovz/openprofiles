@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 (2026-10-14)
+
+- **Less memory:** sharp's own image cache is off (the drawn posters are cached already), and the
+  Docker image sets `MALLOC_ARENA_MAX=2`. A server drawing art for 300 profiles settled about
+  40 MB lower. If you set a memory limit, 512 MB (the example compose file) leaves headroom for
+  a shared server; a household needs far less.
+
 ## 1.2.0 (2026-10-13)
 
 - **Profile passcodes:** a profile can have a 4-digit passcode (**Edit › Passcode**). Switching

@@ -11,6 +11,11 @@ import { isBust, isPhoto, pictureSvg } from './avatars.js';
  * Specs: the "Poster tiles" and "Clips" artboards in the M2 design canvas.
  */
 
+// libvips' own operation cache (up to 50 MB) only holds memory here: every image is drawn once
+// and the PNGs are cached by ArtCache. Off, a server rendering 300 profiles' art settled about
+// 25 MB lower (measured in the production image, 2026-10-14).
+sharp.cache(false);
+
 const require = createRequire(import.meta.url);
 const WEIGHTS = [500, 700, 800];
 const SUBSETS = ['latin', 'latin-ext'];
