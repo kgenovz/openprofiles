@@ -29,7 +29,7 @@ function parseCookies(header = '') {
 const LIMITER_MAX_KEYS = 10000;
 
 /** Requests from the page scripts (they send the CSRF header or JSON) get JSON answers. */
-const wantsJson = (req) => Boolean(req.get('x-csrf-token') || req.get('x-requested-with') || req.is('application/json'));
+export const wantsJson = (req) => Boolean(req.get('x-csrf-token') || req.get('x-requested-with') || req.is('application/json'));
 const MAX_EMAIL_LENGTH = 254;
 
 /**

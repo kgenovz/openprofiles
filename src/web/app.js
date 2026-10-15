@@ -10,7 +10,7 @@ import { AVATAR_COLOURS, BIN_DAYS, DEFAULT_COLOUR, UserError, userMessageOf } fr
 import { SECTIONS, Settings } from '../core/settings.js';
 import { serverStats } from '../core/stats.js';
 import { randomToken } from '../crypto.js';
-import { createAuth } from './auth.js';
+import { createAuth, wantsJson } from './auth.js';
 import { themeCss } from './theme.js';
 import {
   accountPage, addonManagerPage, adminPage, avatarUrl, backupsPage, errorPage, installPage, managerAddonRow, passcodePage, privacyPage, profilesPage,
@@ -480,7 +480,7 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
   r.post('/profiles/:id/addons/health', json((req) => req.service.checkAddonHealth(idParam(req))));
 
   // Fetch an add-on by its link; the page gets the row to show, already rendered.
-  r.post('/addons/lookup', express.json({ limit: '8kb' }), json(async (req) => {
+  r.post('/addons/lookup', express.json({ limit: '64kb' }), json(async (req) => {
     const found = await req.service.lookupAddon(String(req.body?.url || ''));
     if (found.self) throw new UserError('ADDON_FETCH', 'That is OpenProfiles itself. Every profile has it already.');
     const row = req.body?.for === 'wizard' ? wizardAddonRow(found, { checked: true }) : managerAddonRow(found, { isNew: true });
@@ -903,11 +903,17 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
   app.use((req, res) => sendPage(res, errorPage({ site: site(), status: 404, message: "There's nothing here." }), 404));
   // Four parameters is how Express recognises an error handler.
   app.use((err, req, res, _next) => {
-    // A body that won't parse: its error message quotes part of the body, so it stays out of the log.
+    // A body that won't parse or is too big is the sender's problem, not the server's: a warning,
+    // and its error message quotes part of the body, so only the type goes in the log.
     const parse = err.type === 'entity.parse.failed' || err.type === 'entity.too.large';
-    log.error('Request failed', { path: logPath(req.path), ...(parse ? { error: err.type } : { error: err.message, stack: err.stack }) });
+    if (parse) log.warn('Request body refused', { path: logPath(req.path), error: err.type });
+    else log.error('Request failed', { path: logPath(req.path), error: err.message, stack: err.stack });
     const status = err.status && err.status < 500 ? err.status : 500;
-    sendPage(res, errorPage({ site: site(), status, message: status === 500 ? 'The server log has details.' : 'That request was not valid.' }), status);
+    const message = status === 500 ? 'The server log has details.'
+      : err.type === 'entity.too.large' ? "That's more than this page can send. An add-on link that long is more than OpenProfiles takes."
+        : 'That request was not valid.';
+    if (wantsJson(req)) return res.status(status).set('Cache-Control', 'no-store').json({ error: message });
+    return sendPage(res, errorPage({ site: site(), status, message }), status);
   });
 
   return app;

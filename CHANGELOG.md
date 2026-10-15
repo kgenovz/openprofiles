@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Adding an add-on by link** takes links up to 64 KB (configured add-ons with keys in the link
+  can be long; the page refused anything over 8 KB), and a link too long gets a plain message
+  instead of an error page. Oversized or malformed requests are logged as warnings, not errors.
+
 ## 1.2.1 (2026-10-14)
 
 - **Less memory:** sharp's own image cache is off (the drawn posters are cached already), and the

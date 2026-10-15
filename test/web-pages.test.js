@@ -177,5 +177,17 @@ describe('web pages', () => {
     const bad = await b.postJson('/addons/lookup', { url: 'http://192.168.1.5/manifest.json' });
     assert.equal(bad.status, 400);
     assert.ok(bad.body.error);
+
+    // A long configured add-on link is taken; one too long gets a plain answer. (Seen live: a
+    // configured add-on's link over 8 KB was refused with an HTML error page.)
+    const long = `https://configured.example/${'c'.repeat(20_000)}/manifest.json`;
+    ctx.web.manifests.set(long, richAddon('Configured').manifest);
+    const longOk = await b.postJson('/addons/lookup', { url: long, for: 'manager' });
+    assert.equal(longOk.status, 200);
+    assert.equal(longOk.body.name, 'Configured');
+
+    const huge = await b.postJson('/addons/lookup', { url: `https://x.example/${'c'.repeat(70_000)}/manifest.json` });
+    assert.equal(huge.status, 413);
+    assert.match(huge.body.error, /more than OpenProfiles takes/);
   });
 });
