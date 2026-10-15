@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.2.2 (2026-10-15)
 
-- **Adding an add-on by link** takes links up to 64 KB (configured add-ons with keys in the link
-  can be long; the page refused anything over 8 KB), and a link too long gets a plain message
-  instead of an error page. Oversized or malformed requests are logged as warnings, not errors.
+- **Adding an add-on by link** takes links up to 64 KB: configured add-ons with keys in the link
+  can be long, and the page refused anything over 8 KB.
+- **Clearer messages when something fails:** the page now says what happened (too big, with the
+  limit; the server took too long; signed out; page expired; a server problem; or no connection)
+  instead of a guess like "check the connection" or "that file isn't an export". Too-big messages
+  name what was too big and the limit (add-on links, photos, logos, imports).
+- Oversized or malformed requests are logged as warnings, not errors.
 
 ## 1.2.1 (2026-10-14)
 

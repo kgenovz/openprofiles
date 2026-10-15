@@ -133,6 +133,12 @@ describe('profile photos on the page', () => {
     assert.doesNotMatch((await b().request('/profiles/new')).text, /data-tab-for="photo"/, 'not in the wizard');
   });
 
+  it('a photo over the limit gets an answer that says so, not an error page', async () => {
+    const res = await upload(Buffer.alloc(5 * 1024 * 1024));
+    assert.equal(res.status, 413);
+    assert.match((await res.json()).error, /That photo is too big: the limit is 4 MB/);
+  });
+
   it('uploads, shows on the page and in Stremio, and can be removed', async () => {
     assert.equal((await upload('not a picture', 'text/plain')).status, 400);
     const noToken = await fetch(`${base}/profiles/${kids.id}/photo`, { method: 'POST', headers: { cookie: b().cookie, 'content-type': 'image/jpeg' }, body: await solid('#e05d0c') });

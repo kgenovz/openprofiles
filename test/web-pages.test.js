@@ -188,6 +188,6 @@ describe('web pages', () => {
 
     const huge = await b.postJson('/addons/lookup', { url: `https://x.example/${'c'.repeat(70_000)}/manifest.json` });
     assert.equal(huge.status, 413);
-    assert.match(huge.body.error, /more than OpenProfiles takes/);
+    assert.match(huge.body.error, /add-on link is too long: OpenProfiles takes links up to 64 KB/);
   });
 });

@@ -1,3 +1,27 @@
+// ── answers from the server ─────────────────────────────────────────────────
+
+const OFFLINE = "Couldn't reach the server. Check your connection and try again.";
+
+/**
+ * The server's answer as JSON. When it isn't (a size limit, the proxy giving up
+ * on a slow answer, a crash), an `error` that says what happened, instead of the
+ * page guessing ("check the connection") from a reply it couldn't read.
+ */
+async function answerOf(res) {
+  const data = await res.json().catch(() => null);
+  if (data && typeof data === 'object') return data;
+  const s = res.status;
+  const error = s === 413 ? "That's too big to send here."
+    : s === 401 ? 'You were signed out. Reload the page and sign in again.'
+      : s === 403 ? 'This page expired. Reload it and try again.'
+        : s === 429 ? 'Too many tries for now. Wait a minute and try again.'
+          : s === 502 || s === 503 || s === 504 ? `The server took too long to answer (error ${s}). Try again in a minute.`
+            : s >= 500 ? `Something went wrong on the server (error ${s}). Try again in a minute.`
+              : res.ok ? 'The server gave an answer this page could not read. Reload the page and try again.'
+                : `The server didn't accept that (error ${s}).`;
+  return { error };
+}
+
 // Confirm prompts for destructive forms (or one button of a form), and a busy
 // state so a slow switch isn't submitted twice.
 document.addEventListener('submit', (event) => {
@@ -146,8 +170,8 @@ document.addEventListener('change', async (event) => {
       headers: { 'content-type': 'application/json', 'x-csrf-token': input.dataset.csrf },
       body: await file.text(),
     });
-    const data = await res.json();
-    if (!res.ok) {
+    const data = await answerOf(res);
+    if (!res.ok || data.error) {
       status.textContent = data.error || 'That file could not be read.';
       return;
     }
@@ -167,7 +191,7 @@ document.addEventListener('change', async (event) => {
     status.textContent = '';
     form.hidden = false;
   } catch {
-    status.textContent = 'Upload failed. Check the connection and try again.';
+    status.textContent = OFFLINE;
   }
 });
 
@@ -182,6 +206,13 @@ document.addEventListener('click', async (event) => {
     status.textContent = 'Choose the export file first.';
     return;
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    status.textContent = "That file isn't an OpenProfiles export: it can't be read as one.";
+    return;
+  }
   go.disabled = true;
   status.textContent = 'Bringing it back…';
   try {
@@ -189,19 +220,19 @@ document.addEventListener('click', async (event) => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-csrf-token': box.dataset.csrf },
       body: JSON.stringify({
-        file: JSON.parse(await file.text()),
+        file: parsed,
         passphrase: box.querySelector('[data-everything-pass]').value || null,
         acceptOtherAccount: box.querySelector('[data-everything-other]').checked,
       }),
     });
-    const data = await res.json();
-    if (res.ok) {
+    const data = await answerOf(res);
+    if (res.ok && !data.error) {
       location.reload();
       return;
     }
     status.textContent = data.error || 'That file could not be brought back.';
   } catch {
-    status.textContent = "That file isn't an OpenProfiles export.";
+    status.textContent = OFFLINE;
   }
   go.disabled = false;
 });
@@ -276,8 +307,8 @@ async function addByLink(box) {
       headers: { 'content-type': 'application/json', 'x-csrf-token': csrfOf(box) },
       body: JSON.stringify({ url, for: box.dataset.kind }),
     });
-    const data = await res.json();
-    if (!res.ok) {
+    const data = await answerOf(res);
+    if (!res.ok || data.error) {
       status.textContent = data.error || "That add-on couldn't be added.";
       return;
     }
@@ -296,7 +327,7 @@ async function addByLink(box) {
     input.value = '';
     listChanged(list);
   } catch {
-    status.textContent = 'Checking failed. Check the connection and try again.';
+    status.textContent = OFFLINE;
   }
 }
 
@@ -382,8 +413,8 @@ if (managerForm) {
     health.textContent = 'Checking…';
     try {
       const res = await fetch(health.dataset.healthCheck, { method: 'POST', headers: { 'x-csrf-token': csrfOf(health) } });
-      const results = await res.json();
-      if (!res.ok) {
+      const results = await answerOf(res);
+      if (!res.ok || results.error) {
         health.textContent = results.error || "Couldn't check them.";
         setTimeout(() => { health.textContent = label; }, 4000);
         health.disabled = false;
@@ -398,7 +429,12 @@ if (managerForm) {
         pill.dataset.state = result;
         pill.hidden = false;
       }
-    } catch { /* leave the pills hidden */ }
+    } catch {
+      health.textContent = "Couldn't reach the server";
+      setTimeout(() => { health.textContent = label; }, 4000);
+      health.disabled = false;
+      return;
+    }
     health.disabled = false;
     health.textContent = label;
   });
@@ -696,11 +732,11 @@ if (lookForm) {
         headers: { 'x-csrf-token': file.dataset.csrf, 'content-type': picked.type || 'application/octet-stream' },
         body: picked,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "That picture couldn't be uploaded.");
+      const data = await answerOf(res);
+      if (!res.ok || data.error) throw new Error(data.error || "That picture couldn't be uploaded.");
       location.reload();
     } catch (err) {
-      status.textContent = err.message;
+      status.textContent = err instanceof TypeError ? OFFLINE : err.message;
     }
   });
 }
@@ -741,11 +777,11 @@ document.addEventListener('change', async (event) => {
       headers: { 'x-csrf-token': input.dataset.csrf, 'content-type': body.type || 'application/octet-stream' },
       body,
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "That photo couldn't be uploaded.");
+    const data = await answerOf(res);
+    if (!res.ok || data.error) throw new Error(data.error || "That photo couldn't be uploaded.");
     location.hash = 'picture';
     location.reload();
   } catch (err) {
-    status.textContent = err.message;
+    status.textContent = err instanceof TypeError ? OFFLINE : err.message;
   }
 });

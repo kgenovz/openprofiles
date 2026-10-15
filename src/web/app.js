@@ -38,6 +38,18 @@ const idParam = (req) => {
   return Number.isSafeInteger(id) && id > 0 ? id : -1;
 };
 
+const MB = 1024 * 1024;
+/** What was too big, by where it was sent, with the limit, so the page can say more than "failed". */
+const TOO_LARGE = [
+  [/^\/addons\/lookup$/, "That add-on link is too long: OpenProfiles takes links up to 64 KB. Check that you copied only the add-on's install link (it ends in /manifest.json)."],
+  [/^\/profiles\/\d+\/photo$/, `That photo is too big: the limit is ${PHOTO_UPLOAD_MAX / MB} MB. Pick a smaller one.`],
+  [/^\/admin\/logo$/, `That picture is too big: the limit is ${LOGO_UPLOAD_MAX / MB} MB. Pick a smaller one.`],
+  [/^\/import\/preview$/, 'That file is too big to be a StremShare backup (the limit is 64 MB).'],
+  [/^\/import\/everything$/, "That export is too big to bring back here (the limit is 128 MB)."],
+];
+const tooLargeMessage = (path) => TOO_LARGE.find(([re]) => re.test(path))?.[1]
+  ?? 'That was more than this page can send (a form takes up to 64 KB). If you pasted something long, shorten it.';
+
 /** A profile id from a query or form field, or null. */
 const profileIdOf = (value) => {
   const id = Number(value);
@@ -909,9 +921,9 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
     if (parse) log.warn('Request body refused', { path: logPath(req.path), error: err.type });
     else log.error('Request failed', { path: logPath(req.path), error: err.message, stack: err.stack });
     const status = err.status && err.status < 500 ? err.status : 500;
-    const message = status === 500 ? 'The server log has details.'
-      : err.type === 'entity.too.large' ? "That's more than this page can send. An add-on link that long is more than OpenProfiles takes."
-        : 'That request was not valid.';
+    const message = status === 500 ? 'Something went wrong on the server. The server log has details.'
+      : err.type === 'entity.too.large' ? tooLargeMessage(req.path)
+        : 'That request was not valid. Reload the page and try again.';
     if (wantsJson(req)) return res.status(status).set('Cache-Control', 'no-store').json({ error: message });
     return sendPage(res, errorPage({ site: site(), status, message }), status);
   });
