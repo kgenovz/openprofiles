@@ -10,8 +10,9 @@ import { migrate } from '../src/db.js';
 import { openExport } from '../src/core/exporter.js';
 import { WrongKeyError, checkSecretKey } from '../src/core/keycheck.js';
 import { runDaily, snapshotDatabase } from '../src/core/scheduler.js';
+import { MAX_ADDONS } from '../src/core/guard.js';
 import { MAX_PROFILES, STREMIO_BUDGET } from '../src/core/service.js';
-import { libItem } from './helpers/fakeStremio.js';
+import { addon, cinemetaAddon, libItem } from './helpers/fakeStremio.js';
 import { linkedWithKids } from './helpers/setup.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -58,6 +59,17 @@ describe('automatic backups', () => {
     fake.seed({ library: [libItem('tt-new')] });
     assert.equal((await service.autoBackup()).done, true);
     assert.equal(repo.listBackups().filter((b) => b.kind === 'auto').length, 2);
+  });
+
+  // Seen live: an account with 89 add-ons failed its daily backup at the old limit of 50.
+  it(`backs up an account with ${MAX_ADDONS} add-ons; one more is refused, not cut short`, async () => {
+    const { service, repo, fake } = await linkedWithKids();
+    const many = (n) => [cinemetaAddon(), ...Array.from({ length: n - 1 }, (_, i) => addon(`a${i}`))];
+    fake.seed({ addons: many(MAX_ADDONS) });
+    assert.equal((await service.autoBackup()).done, true);
+    assert.equal(repo.latestBackup('auto').addon_count, MAX_ADDONS);
+    fake.seed({ addons: many(MAX_ADDONS + 1) });
+    await assert.rejects(service.autoBackup(), (e) => e.code === 'TOO_LARGE');
   });
 
   it('skips an account Stremio has signed out, without failing', async () => {

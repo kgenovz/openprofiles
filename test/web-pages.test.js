@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { decodeSnapshot } from '../src/core/guard.js';
+import { MAX_ADDONS, decodeSnapshot } from '../src/core/guard.js';
 import { Settings } from '../src/core/settings.js';
 import { silentLogger } from '../src/log.js';
 import { createApp } from '../src/web/app.js';
@@ -189,5 +189,45 @@ describe('web pages', () => {
     const huge = await b.postJson('/addons/lookup', { url: `https://x.example/${'c'.repeat(70_000)}/manifest.json` });
     assert.equal(huge.status, 413);
     assert.match(huge.body.error, /add-on link is too long: OpenProfiles takes links up to 64 KB/);
+  });
+
+  it(`the manager saves a profile with ${MAX_ADDONS} add-ons, every catalog name sent along`, async () => {
+    const lots = await ctx.accounts.forAccount(1).createProfile({ name: 'Lots', from: 'empty' });
+    const catalogs = (id) => ['popular', 'trending', 'top-rated', 'new', 'upcoming'].map((c) => ({ type: 'movie', id: `${id}.${c}`, name: `${id} ${c}` }));
+    // OpenProfiles joins the list when it's saved, making MAX_ADDONS.
+    const many = [cinemetaAddon(), ...Array.from({ length: MAX_ADDONS - 2 }, (_, i) => richAddon(`list-${i}`, { catalogs: catalogs(`list-${i}`) }))];
+    repo().saveProfileSnapshot(lots.id, { library: [], addons: many, notifs: [] });
+
+    // A server of its own: the sign-ins above use up the 10 per address.
+    const own = createApp({ config: { publicUrl: 'https://profiles.example.com', trustProxy: false }, db: ctx.db, accounts: ctx.accounts, settings: ctx.settings, log: silentLogger }).listen(0);
+    await new Promise((resolve) => own.once('listening', resolve));
+    try {
+      const c = new Browser(`http://127.0.0.1:${own.address().port}`);
+      await c.signIn();
+      // The form as a page without scripts sends it: the order, and every catalog's name.
+      // (Rows from other profiles sit in <template>s, which a browser doesn't send.)
+      const manager = (await c.request(`/profiles/${lots.id}/addons`)).text;
+      const list = manager.slice(manager.indexOf('data-kind="manager"'), manager.indexOf('</ul>', manager.indexOf('data-kind="manager"')));
+      const fields = [
+        ['base', manager.match(/name="base" value="([0-9a-f]+)"/)[1]],
+        ...[...list.matchAll(/name="(ref|name:[^"]+)" value="([^"]*)"/g)].map((m) => [m[1], m[2]]),
+      ];
+      fields.find(([name]) => name.endsWith(':movie:list-0.popular'))[1] = 'Renamed';
+      assert.ok(fields.length > 1000 && new URLSearchParams(fields).toString().length > 64 * 1024, 'over the old form limits');
+
+      const res = await c.post(`/profiles/${lots.id}/addons`, fields);
+      assert.equal(res.status, 303);
+      assert.match((await c.request(res.location)).text, /Saved Lots&#39;s add-ons/);
+
+      // Too many fields gets the same plain answer as too many bytes.
+      const flood = await c.post(`/profiles/${lots.id}/addons`, Array.from({ length: 5001 }, () => ['x', '1']));
+      assert.equal(flood.status, 413);
+      assert.match(flood.text, /a form takes up to 256 KB/);
+    } finally {
+      own.close();
+    }
+    const addons = saved(lots.id).addons;
+    assert.equal(addons.length, MAX_ADDONS);
+    assert.equal(addons.find((a) => a.manifest.name === 'list-0').manifest.catalogs[0].name, 'Renamed');
   });
 });

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { Cipher, DecryptError, loadOrCreateKey } from '../src/crypto.js';
-import { GuardError, decodeSnapshot } from '../src/core/guard.js';
+import { GuardError, MAX_ADDONS, decodeSnapshot } from '../src/core/guard.js';
 import { addon, libItem } from './helpers/fakeStremio.js';
 
 const cipher = new Cipher(crypto.randomBytes(32));
@@ -80,7 +80,8 @@ describe('decodeSnapshot (target guard)', () => {
 
   it('enforces caps by throwing, never truncating', () => {
     refuses(row({ library: Array.from({ length: 10001 }, (_, i) => libItem(`tt${i}`)) }), 'TOO_LARGE');
-    refuses(row({ addons: Array.from({ length: 51 }, (_, i) => addon(`a${i}`)) }), 'TOO_LARGE');
+    refuses(row({ addons: Array.from({ length: MAX_ADDONS + 1 }, (_, i) => addon(`a${i}`)) }), 'TOO_LARGE');
+    assert.equal(decodeSnapshot(cipher, row({ addons: Array.from({ length: MAX_ADDONS }, (_, i) => addon(`a${i}`)) }), 'Kids').addons.length, MAX_ADDONS);
   });
 
   it('refuses malformed add-ons', () => {

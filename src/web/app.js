@@ -39,6 +39,11 @@ const idParam = (req) => {
 };
 
 const MB = 1024 * 1024;
+// The add-on manager sends every catalog's name, so a profile with MAX_ADDONS add-ons and a
+// few catalogs each passes 64 KB and body-parser's default of 1,000 fields.
+const FORM_MAX_KB = 256;
+const FORM_MAX_FIELDS = 5000;
+const tooLarge = (err) => err.type === 'entity.too.large' || err.type === 'parameters.too.many';
 /** What was too big, by where it was sent, with the limit, so the page can say more than "failed". */
 const TOO_LARGE = [
   [/^\/addons\/lookup$/, "That add-on link is too long: OpenProfiles takes links up to 64 KB. Check that you copied only the add-on's install link (it ends in /manifest.json)."],
@@ -48,7 +53,7 @@ const TOO_LARGE = [
   [/^\/import\/everything$/, "That export is too big to bring back here (the limit is 128 MB)."],
 ];
 const tooLargeMessage = (path) => TOO_LARGE.find(([re]) => re.test(path))?.[1]
-  ?? 'That was more than this page can send (a form takes up to 64 KB). If you pasted something long, shorten it.';
+  ?? `That was more than this page can send (a form takes up to ${FORM_MAX_KB} KB). If you pasted something long, shorten it.`;
 
 /** A profile id from a query or form field, or null. */
 const profileIdOf = (value) => {
@@ -116,7 +121,7 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
   app.use(securityHeaders);
   app.use('/static', express.static(STATIC_DIR, { maxAge: '1h', index: false }));
   app.use('/fonts', express.static(FONTS_DIR, { maxAge: '30d', index: false, extensions: false }));
-  app.use(express.urlencoded({ extended: false, limit: '64kb' }));
+  app.use(express.urlencoded({ extended: false, limit: `${FORM_MAX_KB}kb`, parameterLimit: FORM_MAX_FIELDS }));
 
   const sendPage = (res, page, status = 200) => {
     res.status(status).set('Cache-Control', 'no-store').type('html').send(String(page));
@@ -917,12 +922,12 @@ export function createApp({ config, db, accounts, log, settings = new Settings({
   app.use((err, req, res, _next) => {
     // A body that won't parse or is too big is the sender's problem, not the server's: a warning,
     // and its error message quotes part of the body, so only the type goes in the log.
-    const parse = err.type === 'entity.parse.failed' || err.type === 'entity.too.large';
+    const parse = err.type === 'entity.parse.failed' || tooLarge(err);
     if (parse) log.warn('Request body refused', { path: logPath(req.path), error: err.type });
     else log.error('Request failed', { path: logPath(req.path), error: err.message, stack: err.stack });
     const status = err.status && err.status < 500 ? err.status : 500;
     const message = status === 500 ? 'Something went wrong on the server. The server log has details.'
-      : err.type === 'entity.too.large' ? tooLargeMessage(req.path)
+      : tooLarge(err) ? tooLargeMessage(req.path)
         : 'That request was not valid. Reload the page and try again.';
     if (wantsJson(req)) return res.status(status).set('Cache-Control', 'no-store').json({ error: message });
     return sendPage(res, errorPage({ site: site(), status, message }), status);

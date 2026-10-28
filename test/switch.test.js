@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { GuardError } from '../src/core/guard.js';
+import { GuardError, MAX_ADDONS } from '../src/core/guard.js';
 import { UserError } from '../src/core/service.js';
-import { addon, libItem, notif } from './helpers/fakeStremio.js';
+import { addon, cinemetaAddon, libItem, notif } from './helpers/fakeStremio.js';
 import { linkedWithKids } from './helpers/setup.js';
 
 describe('switchTo', () => {
@@ -178,6 +178,16 @@ describe('switchTo', () => {
     fake.seed({ library: Array.from({ length: 10001 }, (_, i) => libItem(`tt${i}`)) });
     await assert.rejects(service.switchTo(kids.id), (e) => e instanceof UserError && e.code === 'TOO_LARGE');
     assert.equal(fake.callCount('datastorePut'), 0);
+  });
+
+  it(`switches to a profile with ${MAX_ADDONS} add-ons, and back`, async () => {
+    const { service, repo, fake, kids, original } = await linkedWithKids();
+    const many = [cinemetaAddon(), ...Array.from({ length: MAX_ADDONS - 1 }, (_, i) => addon(`a${i}`))];
+    repo.saveProfileSnapshot(kids.id, { library: [], addons: many, notifs: [] });
+    await service.switchTo(kids.id);
+    assert.deepEqual(fake.addons.map((a) => a.transportUrl), many.map((a) => a.transportUrl));
+    await service.switchTo(original.id);
+    assert.equal(repo.getProfile(kids.id).addon_count, MAX_ADDONS, 'saved on the way out');
   });
 
   it('writes the library in chunks of 150', async () => {

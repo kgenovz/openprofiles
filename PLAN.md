@@ -60,7 +60,7 @@ Migrations: 1 first schema · 2 avatar colours · 3 accounts · 4 backups safety
 
 Backup retention: `original` forever, `auto` 14 (at most one a day, only when something
 changed), `pre_switch` 5, `pre_restore` 3, `pre_change` 20, `manual` 10, `imported` 20. Limits:
-20 profiles per account, 10,000 library items, 50 add-ons; the bin keeps a deleted profile 30
+20 profiles per account, 10,000 library items, 200 add-ons; the bin keeps a deleted profile 30
 days (20 at most).
 
 ## Switch algorithm

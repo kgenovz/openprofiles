@@ -2,7 +2,7 @@ import { DecryptError } from '../crypto.js';
 import { countActive, hasId } from './library.js';
 
 export const MAX_LIBRARY_ITEMS = 10000;
-export const MAX_ADDONS = 50;
+export const MAX_ADDONS = 200;
 
 /** A refusal that happens before anything is written to Stremio. */
 export class GuardError extends Error {

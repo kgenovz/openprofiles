@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Up to 200 add-ons** per account and profile (was 50): an account with more failed its daily
+  backup and couldn't switch. Forms take up to 256 KB and 5,000 fields (was 64 KB and 1,000), so
+  the add-on manager can save a list that long with every catalog name.
+
 ## 1.2.2 (2026-10-15)
 
 - **Adding an add-on by link** takes links up to 64 KB: configured add-ons with keys in the link
