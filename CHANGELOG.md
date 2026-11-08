@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.4 (2026-11-08)
+
+- **Security:** body-parser 2.4.0 (was 2.3.0), which reads forms and JSON: a compressed request
+  body with bytes after its end could be used for a denial of service
+  ([GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828)). Also qs 6.17.1.
+
 ## 1.2.3 (2026-11-08)
 
 - **Up to 200 add-ons** per account and profile (was 50): an account with more failed its daily
