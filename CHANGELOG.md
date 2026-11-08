@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.3 (2026-11-08)
 
 - **Up to 200 add-ons** per account and profile (was 50): an account with more failed its daily
   backup and couldn't switch. Forms take up to 256 KB and 5,000 fields (was 64 KB and 1,000), so
